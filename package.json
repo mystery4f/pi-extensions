@@ -1,0 +1,49 @@
+{
+  "name": "pi-extensions",
+  "version": "0.1.0",
+  "description": "A collection of Pi coding agent extensions.",
+  "type": "module",
+  "license": "MIT",
+  "author": {
+    "name": "x1any",
+    "url": "https://github.com/x1any"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mystery4f/pi-extensions.git"
+  },
+  "bugs": {
+    "url": "https://github.com/mystery4f/pi-extensions/issues"
+  },
+  "homepage": "https://github.com/mystery4f/pi-extensions#readme",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "coding-agent"
+  ],
+  "main": "./index.ts",
+  "exports": {
+    ".": "./index.ts"
+  },
+  "files": [
+    "index.ts",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@types/node": "*",
+    "typescript": "*"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  }
+}
