@@ -228,12 +228,6 @@ export default function autoAddDirExtension(pi: ExtensionAPI) {
 		discoveredDirs.clear();
 		hasInjectedBefore = false;
 		config = loadConfig();
-		if (config.rules.length > 0) {
-			ctx.ui.notify(
-				`[auto-add-dir] ${config.rules.length} rule(s) loaded`,
-				"info",
-			);
-		}
 	});
 
 	// input: 检测关键词 + 记录目录

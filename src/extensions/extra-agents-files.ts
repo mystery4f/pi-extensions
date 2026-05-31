@@ -147,26 +147,32 @@ export default function extraAgentsFilesExtension(pi: ExtensionAPI) {
 
 	pi.on("session_start", async (_event, ctx) => {
 		extraFiles = collectExtraFiles(ctx.cwd);
+	});
 
-		if (extraFiles.length > 0) {
+	pi.registerCommand("extra-files", {
+		description: "查看已加载的 extra context files",
+		handler: async (_args, ctx) => {
+			if (extraFiles.length === 0) {
+				ctx.ui.notify("extra-agents-files: no files loaded", "info");
+				return;
+			}
 			ctx.ui.notify(
-				`Loaded ${extraFiles.length} extra context file(s): ${extraFiles.map((f) => f.displayPath).join(", ")}`,
+				`extra-agents-files: ${extraFiles.length} file(s): ${extraFiles.map((f) => f.displayPath).join(", ")}`,
 				"info",
 			);
-		}
+		},
 	});
 
 	pi.on("before_agent_start", async (event) => {
 		if (extraFiles.length === 0) return;
 
 		const sections = extraFiles
-			.map((f) => `### ${f.displayPath}\n\n${f.content}`)
-			.join("\n\n");
+			.map((f) => `# ${f.displayPath}\n\n${f.content}`)
+			.join("\n");
 
 		return {
 			systemPrompt:
-				event.systemPrompt +
-				`\n\n## Extra Project Context\n\n${sections}`,
+				event.systemPrompt + `\n${sections}`,
 		};
 	});
 }
