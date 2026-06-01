@@ -7,25 +7,30 @@
  * Global settings (~/.pi/agent/settings.json):
  *
  *   {
- *     "extraContextFiles": [
- *       { "path": "AGENTS-Java.md", "tags": ["Java"] },
- *       { "path": "AGENTS-frontend.md", "tags": ["frontend"] },
- *       { "path": "AGENTS-general.md" }
- *     ]
+ *     "extraContext": {
+ *       "files": [
+ *         { "path": "AGENTS-Java.md", "tags": ["Java"] },
+ *         { "path": "AGENTS-frontend.md", "tags": ["frontend"] },
+ *         { "path": "AGENTS-general.md" }
+ *       ],
+ *       "includes": ["Java"]
+ *     }
  *   }
  *
- *   - "tags": string array — only loaded when project includes a matching tag
+ *   - "files": array of file entries (string path or { path, tags? })
+ *   - "includes": string array — declares which tags are needed
+ *   - "tags": string array — only loaded when includes contains a matching tag
  *   - No tags = always loaded (unconditional)
  *   - Paths resolve relative to ~/.pi/agent
  *
  * Project settings (.pi/settings.json):
  *
  *   {
- *     "extraContextIncludes": ["Java"]
+ *     "extraContext": {
+ *       "files": [...],
+ *       "includes": ["Java"]
+ *     }
  *   }
- *
- *   - Declares which tags the project needs
- *   - A global file is loaded if it has no tags OR any of its tags match
  *
  * Absolute paths and ~ are supported.
  *
@@ -44,12 +49,22 @@ interface ExtraFile {
 
 type FileEntry = string | { path: string; tags?: string[] };
 
+interface ExtraContextConfig {
+	files?: FileEntry[];
+	includes?: string[];
+}
+
 function readJSON(filePath: string): Record<string, unknown> | null {
 	try {
 		return JSON.parse(fs.readFileSync(filePath, "utf-8"));
 	} catch {
 		return null;
 	}
+}
+
+function getExtraContext(raw: Record<string, unknown> | null): ExtraContextConfig {
+	if (!raw || typeof raw.extraContext !== "object" || !raw.extraContext) return {};
+	return raw.extraContext as ExtraContextConfig;
 }
 
 function resolveFilePath(filePath: string, baseDir: string): string {
@@ -87,9 +102,10 @@ function loadFromSettings(
 ): ExtraFile[] {
 	const results: ExtraFile[] = [];
 	const raw = readJSON(settingsPath);
-	if (!raw || !Array.isArray(raw.extraContextFiles)) return results;
+	const ctx = getExtraContext(raw);
+	if (!Array.isArray(ctx.files)) return results;
 
-	for (const entry of raw.extraContextFiles as FileEntry[]) {
+	for (const entry of ctx.files as FileEntry[]) {
 		const { filePath, tags } = normalizeFileEntry(entry);
 
 		// Filter by includes (only for global settings)
@@ -121,10 +137,9 @@ function collectExtraFiles(cwd: string): ExtraFile[] {
 	// Read project includes first (needed to filter global files)
 	const projectSettingsPath = path.join(cwd, ".pi", "settings.json");
 	const projectRaw = readJSON(projectSettingsPath);
+	const projectCtx = getExtraContext(projectRaw);
 	const includes = new Set<string>(
-		Array.isArray(projectRaw?.extraContextIncludes)
-			? (projectRaw.extraContextIncludes as string[])
-			: [],
+		Array.isArray(projectCtx.includes) ? projectCtx.includes : [],
 	);
 
 	// 1. Global settings: ~/.pi/agent/settings.json (resolve relative to ~/.pi/agent)

@@ -24,39 +24,34 @@ A collection of [Pi coding agent](https://github.com/earendil-works/pi-coding-ag
 - 🔄 **去重** — 同一路径只加载一次，项目配置优先级高于全局
 - 🏠 **路径灵活** — 支持相对路径、绝对路径、`~` 展开
 
-**全局配置** (`~/.pi/agent/settings.json`)：
+**配置格式**（全局 `~/.pi/agent/settings.json` 和项目 `.pi/settings.json` 通用）：
 
 ```json
 {
-  "extraContextFiles": [
-    { "path": "AGENTS-Java.md", "tags": ["Java"] },
-    { "path": "AGENTS-frontend.md", "tags": ["frontend"] },
-    { "path": "AGENTS-general.md" }
-  ]
+  "extraContext": {
+    "files": [
+      { "path": "AGENTS-Java.md", "tags": ["Java"] },
+      { "path": "AGENTS-frontend.md", "tags": ["frontend"] },
+      { "path": "AGENTS-general.md" }
+    ],
+    "includes": ["Java"]
+  }
 }
 ```
 
 | 字段 | 说明 |
 |---|---|
-| `path` | 文件路径，相对于 `~/.pi/agent`，支持 `~` 和绝对路径 |
-| `tags` | 可选标签数组。无标签 = 所有项目都加载 |
-
-**项目配置** (`.pi/settings.json`)：
-
-```json
-{
-  "extraContextIncludes": ["Java"]
-}
-```
-
-声明项目需要的标签。全局文件 **无标签** 或 **标签匹配** 时才会加载。
+| `files` | 文件列表，每项为路径字符串或 `{ path, tags? }` 对象 |
+| `files[].path` | 文件路径，全局配置相对于 `~/.pi/agent`，项目配置相对于项目根目录，支持 `~` 和绝对路径 |
+| `files[].tags` | 可选标签数组。无标签 = 所有项目都加载 |
+| `includes` | 可选，声明项目需要的标签。全局文件 **无标签** 或 **标签匹配** 时才会加载 |
 
 **加载逻辑**：
 
-1. 读取项目 `.pi/settings.json` 的 `extraContextIncludes`，构建标签集合
-2. 加载全局文件（过滤标签）
-3. 加载项目级 `extraContextFiles`（不过滤标签）
-4. 所有匹配文件的内容注入 system prompt 的 `Extra Project Context` 区段
+1. 读取项目 `.pi/settings.json` 的 `extraContext.includes`，构建标签集合
+2. 加载全局 `extraContext.files`（过滤标签）
+3. 加载项目级 `extraContext.files`（不过滤标签）
+4. 所有匹配文件的内容注入 system prompt
 
 ---
 
