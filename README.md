@@ -30,9 +30,9 @@ A collection of [Pi coding agent](https://github.com/earendil-works/pi-coding-ag
 {
   "extraContext": {
     "files": [
+      "AGENTS-general.md",
       { "path": "AGENTS-Java.md", "tags": ["Java"] },
-      { "path": "AGENTS-frontend.md", "tags": ["frontend"] },
-      { "path": "AGENTS-general.md" }
+      { "path": "AGENTS-frontend.md", "tags": ["frontend"] }
     ],
     "includes": ["Java"]
   }
@@ -42,6 +42,7 @@ A collection of [Pi coding agent](https://github.com/earendil-works/pi-coding-ag
 | 字段 | 说明 |
 |---|---|
 | `files` | 文件列表，每项为路径字符串或 `{ path, tags? }` 对象 |
+| `"AGENTS-general.md"` | 直接写字符串路径，无条件加载，等同 `{ "path": "...", "tags": [] }` |
 | `files[].path` | 文件路径，全局配置相对于 `~/.pi/agent`，项目配置相对于项目根目录，支持 `~` 和绝对路径 |
 | `files[].tags` | 可选标签数组。无标签 = 所有项目都加载 |
 | `includes` | 可选，声明项目需要的标签。全局文件 **无标签** 或 **标签匹配** 时才会加载 |
