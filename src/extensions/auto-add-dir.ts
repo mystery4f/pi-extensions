@@ -14,8 +14,11 @@
  * 缓存策略：
  *   同一 session 中同一目录只触发一次（discoveredDirs 去重）
  *
- * 配置位置: ~/.pi/agent/settings.json → "autoAddDir" 字段
+ * 配置位置:
+ *   全局: ~/.pi/agent/settings.json → "autoAddDir" 字段
+ *   项目: .pi/settings.json → "autoAddDir" 字段（与全局合并，同 dir 时项目优先）
  * 环境变量: ~/.pi/agent/env.json
+ * 无条件规则: keywords 设为空数组 [] 时，在 session_start 即自动触发
  */
 
 import * as fs from "node:fs";
@@ -140,54 +143,90 @@ interface ResolvedConfig {
 	rules: ResolvedRule[];
 }
 
-function loadConfig(): ResolvedConfig {
-	// 从 settings.json 的 "autoAddDir" 字段读取配置
-	log(`loadConfig: reading from ${SETTINGS_PATH}`);
-
+/**
+ * 解析单个 settings.json 文件中的 autoAddDir 规则
+ */
+function parseRulesFromSettings(
+	settingsPath: string,
+	envJson: Record<string, string>,
+	globalBasePath?: string,
+): ResolvedRule[] {
 	try {
-		if (!fs.existsSync(SETTINGS_PATH)) {
-			log(`loadConfig: settings.json not found`);
-			return { rules: [] };
+		if (!fs.existsSync(settingsPath)) {
+			log(`loadConfig: ${settingsPath} not found`);
+			return [];
 		}
 
 		const settings = JSON.parse(
-			fs.readFileSync(SETTINGS_PATH, "utf-8"),
+			fs.readFileSync(settingsPath, "utf-8"),
 		) as Record<string, any>;
 
 		const cfg = settings.autoAddDir as Config | undefined;
 		if (!cfg || !cfg.rules || cfg.rules.length === 0) {
-			log(`loadConfig: no "autoAddDir" rules in settings.json`);
-			return { rules: [] };
+			return [];
 		}
 
-		const envJson = loadEnvJson();
-		const basePath = cfg.basePath
+		// 项目级 basePath 优先，fallback 到全局 basePath
+		const effectiveBasePath = cfg.basePath
 			? resolveDir(cfg.basePath, envJson)?.dir
-			: undefined;
+			: globalBasePath;
 
 		const rules: ResolvedRule[] = [];
 		for (const rule of cfg.rules) {
-			const result = resolveDir(rule.dir, envJson, basePath);
+			const result = resolveDir(rule.dir, envJson, effectiveBasePath);
 			if (result) {
 				rules.push({
-					keywords: rule.keywords,
+					keywords: rule.keywords ?? [],
 					dir: result.dir,
 					dirSource: result.source,
 					description: rule.description,
 				});
 			} else {
-				log(`loadConfig: SKIPPED "${rule.dir}"`);
+				log(`loadConfig: SKIPPED "${rule.dir}" from ${settingsPath}`);
 			}
 		}
 
-		log(
-			`loadConfig: ${rules.length}/${cfg.rules.length} resolved, basePath=${basePath ?? "(none)"}`,
-		);
-		return { rules };
+		log(`loadConfig: ${rules.length} rule(s) from ${settingsPath}`);
+		return rules;
 	} catch (e) {
-		log(`loadConfig: FAILED ${e}`);
-		return { rules: [] };
+		log(`loadConfig: FAILED ${settingsPath} — ${e}`);
+		return [];
 	}
+}
+
+function loadConfig(cwd?: string): ResolvedConfig {
+	const envJson = loadEnvJson();
+
+	// 1. 全局配置
+	const globalRules = parseRulesFromSettings(SETTINGS_PATH, envJson);
+
+	// 提取全局 basePath（供项目级 fallback）
+	let globalBasePath: string | undefined;
+	try {
+		if (fs.existsSync(SETTINGS_PATH)) {
+			const settings = JSON.parse(fs.readFileSync(SETTINGS_PATH, "utf-8")) as Record<string, any>;
+			const cfg = settings.autoAddDir as Config | undefined;
+			if (cfg?.basePath) {
+				globalBasePath = resolveDir(cfg.basePath, envJson)?.dir;
+			}
+		}
+	} catch {}
+
+	// 2. 项目级配置（与全局合并，同 dir 时项目优先）
+	let projectRules: ResolvedRule[] = [];
+	if (cwd) {
+		const projectSettingsPath = path.join(cwd, ".pi", "settings.json");
+		projectRules = parseRulesFromSettings(projectSettingsPath, envJson, globalBasePath);
+	}
+
+	// 3. 合并：以 dir 为 key，项目覆盖全局
+	const rulesMap = new Map<string, ResolvedRule>();
+	for (const r of globalRules) rulesMap.set(r.dir, r);
+	for (const r of projectRules) rulesMap.set(r.dir, r);
+
+	const rules = [...rulesMap.values()];
+	log(`loadConfig: total ${rules.length} rule(s) (global=${globalRules.length}, project=${projectRules.length})`);
+	return { rules };
 }
 
 // ── 辅助函数 ───────────────────────────────────────────────────
@@ -209,6 +248,8 @@ function readAllContextFiles(
 }
 
 function matchRule(text: string, rule: ResolvedRule): boolean {
+	// 空 keywords = 无条件匹配
+	if (rule.keywords.length === 0) return true;
 	const lower = text.toLowerCase();
 	return rule.keywords.some((kw) => lower.includes(kw.toLowerCase()));
 }
@@ -227,7 +268,23 @@ export default function autoAddDirExtension(pi: ExtensionAPI) {
 	pi.on("session_start", async (_event, ctx) => {
 		discoveredDirs.clear();
 		hasInjectedBefore = false;
-		config = loadConfig();
+		config = loadConfig(ctx.cwd);
+
+		// 无条件规则（keywords 为空）：session 启动时立即发现
+		const unconditionalRules = config.rules.filter(r => r.keywords.length === 0);
+		for (const rule of unconditionalRules) {
+			if (!discoveredDirs.has(rule.dir) && fs.existsSync(rule.dir)) {
+				const contextFiles = readAllContextFiles(rule.dir);
+				discoveredDirs.set(rule.dir, { rule, contextFiles });
+				log(`session_start: unconditional "${rule.description}" → ${rule.dir}`);
+			}
+		}
+
+		const kwCount = config.rules.length - unconditionalRules.length;
+		ctx.ui.notify(
+			`[auto-add-dir] ${config.rules.length} rule(s) (${unconditionalRules.length} unconditional, ${kwCount} keyword)`,
+			"info",
+		);
 	});
 
 	// input: 检测关键词 + 记录目录
