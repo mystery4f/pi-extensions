@@ -63,6 +63,7 @@ A collection of [Pi coding agent](https://github.com/earendil-works/pi-coding-ag
 **特性**：
 
 - 🔍 **关键词匹配** — 不区分大小写，一条规则可配多个关键词
+- ⚡ **无条件规则** — `keywords` 设为空数组 `[]` 时，session 启动即自动触发，无需等待用户输入
 - 🧠 **智能注入** — 第一轮通过 system prompt 指令，后续轮次追加用户消息提醒
 - 🛡️ **保底机制** — 自动读取目录下的 `AGENTS.md` / `CLAUDE.md` 作为后备上下文
 - 🔁 **去重** — 同一 session 中每个目录只触发一次
@@ -95,7 +96,7 @@ A collection of [Pi coding agent](https://github.com/earendil-works/pi-coding-ag
 |---|---|---|
 | `basePath` | `string?` | 全局基础路径，支持 `${VAR}` 占位符 |
 | `rules` | `Rule[]` | 规则列表 |
-| `rules[].keywords` | `string[]` | 触发关键词（不区分大小写） |
+| `rules[].keywords` | `string[]` | 触发关键词（不区分大小写）。设为空数组 `[]` 时成为**无条件规则**，session 启动立即触发 |
 | `rules[].dir` | `string` | 目录路径。绝对路径、`${VAR}` 占位符、相对路径（相对 `basePath`） |
 | `rules[].description` | `string` | 用途描述，注入 system prompt 时展示 |
 
