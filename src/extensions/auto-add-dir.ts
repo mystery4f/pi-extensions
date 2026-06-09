@@ -18,7 +18,7 @@
  *   全局: ~/.pi/agent/settings.json → "autoAddDir" 字段
  *   项目: .pi/settings.json → "autoAddDir" 字段（与全局合并，同 dir 时项目优先）
  * 环境变量: ~/.pi/agent/env.json
- * 无条件规则: keywords 设为空数组 [] 时，在 session_start 即自动触发
+ * 无条件规则: keywords 省略或设为空数组 [] 时，在 session_start 即自动触发
  */
 
 import * as fs from "node:fs";
@@ -58,7 +58,7 @@ const SETTINGS_PATH = path.join(AGENT_DIR, "settings.json");
 // ── 类型 ───────────────────────────────────────────────────────
 
 interface Rule {
-	keywords: string[];
+	keywords?: string[];
 	dir: string;
 	description: string;
 }
