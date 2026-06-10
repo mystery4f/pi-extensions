@@ -123,50 +123,47 @@ function resolveContextWindow(
 // ── Extension ──────────────────────────────────────────────────
 
 export default function routerBridgeExtension(pi: ExtensionAPI) {
-	let currentRoutedModel: RoutedModel | undefined;
 	let currentRouteId: string | undefined;
 	let latestCtx: ExtensionContext | undefined;
 
-	/** Read the cached context window for the current routed model */
-	function getCachedContextWindow(): number | undefined {
-		if (!currentRoutedModel) return undefined;
-		return resolveContextWindow(
-			currentRoutedModel.provider,
-			currentRoutedModel.modelId,
-			(latestCtx as any)?.modelRegistry,
-		);
+	/** Read the latest routed model directly from auto-router (no cache) */
+	function getLatestRoutedModel(): RoutedModel | undefined {
+		if (!currentRouteId) return undefined;
+		try {
+			const router = (globalThis as Record<string, unknown>)
+				.__piCacheOptimizerRouter as {
+				getRoutedModel?: (id: string) => RoutedModel | undefined;
+			} | undefined;
+			return router?.getRoutedModel?.(currentRouteId);
+		} catch {
+			return undefined;
+		}
 	}
 
-	/** Try to refresh routed model info from auto-router's globalThis API */
-	function refreshRoutedModel(): void {
-		if (!currentRouteId) return;
-
-		const router = (globalThis as Record<string, unknown>)
-			.__piCacheOptimizerRouter as {
-			getRoutedModel?: (id: string) => RoutedModel | undefined;
-		} | undefined;
-
-		if (router?.getRoutedModel) {
-			const result = router.getRoutedModel(currentRouteId);
-			if (result) {
-				currentRoutedModel = result;
-			}
-		}
+	/** Resolve the context window for the currently routed model */
+	function resolveActualContextWindow(): number | undefined {
+		const model = getLatestRoutedModel();
+		if (!model) return undefined;
+		return resolveContextWindow(
+			model.provider,
+			model.modelId,
+			(latestCtx as any)?.modelRegistry,
+		);
 	}
 
 	// ── Bridge API (exposed via globalThis) ────────────────────
 
 	const bridge: RouterBridgeAPI = {
 		getRoutedModel(): RoutedModel | undefined {
-			return currentRoutedModel;
+			return getLatestRoutedModel();
 		},
 
 		getActualContextWindow(): number | undefined {
-			return getCachedContextWindow();
+			return resolveActualContextWindow();
 		},
 
 		getActualPercent(): number | undefined {
-			const actualCtxWin = getCachedContextWindow();
+			const actualCtxWin = resolveActualContextWindow();
 			if (!actualCtxWin || !latestCtx) return undefined;
 
 			const usage = latestCtx.getContextUsage?.();
@@ -195,7 +192,7 @@ export default function routerBridgeExtension(pi: ExtensionAPI) {
 		},
 
 		getContextWindowLabel(): string | undefined {
-			const ctxWin = getCachedContextWindow();
+			const ctxWin = resolveActualContextWindow();
 			return ctxWin ? humanReadable(ctxWin) : undefined;
 		},
 	};
@@ -207,7 +204,6 @@ export default function routerBridgeExtension(pi: ExtensionAPI) {
 
 	pi.on("session_start", async (_event, ctx) => {
 		latestCtx = ctx;
-		currentRoutedModel = undefined;
 		currentRouteId = undefined;
 	});
 
@@ -217,20 +213,8 @@ export default function routerBridgeExtension(pi: ExtensionAPI) {
 
 		if (model?.provider === "auto-router") {
 			currentRouteId = model.id;
-			refreshRoutedModel();
 		} else {
 			currentRouteId = undefined;
-			currentRoutedModel = undefined;
 		}
-	});
-
-	// After a turn completes, the routing decision is finalized
-	pi.on("turn_end", async () => {
-		refreshRoutedModel();
-	});
-
-	// Also refresh when an agent turn starts (early update for routing decision)
-	pi.on("agent_start", async () => {
-		refreshRoutedModel();
 	});
 }
