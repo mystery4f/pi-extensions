@@ -1,0 +1,236 @@
+/**
+ * Router Bridge Extension
+ *
+ * Bridges pi-auto-router and pi-bar: exposes the actual underlying model's
+ * context window and token usage so the status bar can show accurate numbers.
+ *
+ * Problem:
+ *   When using pi-auto-router, the model seen by the framework is a virtual
+ *   model (e.g. "auto-router/subscription-reasoning") whose contextWindow is
+ *   taken from the route's first target — not necessarily the actual model
+ *   being routed to. This makes pi-bar's meter segment (e.g. "13% of 200k")
+ *   display incorrect values.
+ *
+ * Solution:
+ *   1. Listen to pi events to track which underlying model was actually routed.
+ *   2. Resolve the real contextWindow from the model registry.
+ *   3. Expose `globalThis.__piRouterBridge` with simple accessor methods.
+ *   4. pi-bar's config.toml can use these in custom eval expressions.
+ *
+ * Usage in pi-bar config.toml:
+ *   ```toml
+ *   [[statusbar.segments]]
+ *   type = "meter"
+ *   value_eval = "globalThis.__piRouterBridge?.getActualPercent() ?? ctx.getContextUsage()?.percent ?? 0"
+ *   eval = """
+ *     (() => {
+ *       const b = globalThis.__piRouterBridge;
+ *       const pct = Math.round(value);
+ *       const cw = b?.getContextWindowLabel() ?? (ctx.model?.contextWindow ? humanReadable(ctx.model.contextWindow) : '');
+ *       return `${pct}% of ${cw}`;
+ *     })()
+ *   """
+ *   ```
+ */
+
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+
+// Lazy reference to @earendil-works/pi-ai — resolved at runtime in the bun environment.
+// We use dynamic require() (supported by bun) to avoid top-level import issues
+// with peer dependencies that may not be installed during typecheck.
+let _piAi: any = undefined;
+function getPiAi(): any {
+	if (!_piAi) {
+		try { _piAi = require("@earendil-works/pi-ai"); } catch { _piAi = null; }
+	}
+	return _piAi;
+}
+
+// ── Types ──────────────────────────────────────────────────────
+
+interface RoutedModel {
+	provider: string;
+	modelId: string;
+}
+
+export interface RouterBridgeAPI {
+	/** Get the currently routed underlying model info */
+	getRoutedModel(): RoutedModel | undefined;
+
+	/** Get the actual context window (in tokens) of the routed model */
+	getActualContextWindow(): number | undefined;
+
+	/** Get the actual usage percent based on real context window */
+	getActualPercent(): number | undefined;
+
+	/** Get a human-readable context window label (e.g. "128k", "1M") */
+	getContextWindowLabel(): string | undefined;
+}
+
+// ── Helpers ────────────────────────────────────────────────────
+
+function humanReadable(n: number): string {
+	if (n >= 1_000_000)
+		return `${(n / 1_000_000).toFixed(n % 1_000_000 === 0 ? 0 : 1)}M`;
+	if (n >= 1_000) return `${Math.round(n / 1_000)}k`;
+	return `${n}`;
+}
+
+/**
+ * Resolve contextWindow from the model registry.
+ * Searches both built-in providers (via getModel) and custom providers
+ * (via ctx.modelRegistry).
+ */
+function resolveContextWindow(
+	provider: string,
+	modelId: string,
+	modelRegistry?: any,
+): number | undefined {
+	// Method 1: pi-ai built-in providers
+	try {
+		const piAi = getPiAi();
+		if (piAi?.getModel) {
+			const model = piAi.getModel(provider, modelId) as { contextWindow?: number } | undefined;
+			if (model?.contextWindow) return model.contextWindow;
+		}
+	} catch {
+		// getModel may throw for unknown providers
+	}
+
+	// Method 2: modelRegistry from ExtensionContext
+	if (
+		modelRegistry &&
+		typeof modelRegistry.getAvailable === "function"
+	) {
+		try {
+			const available = modelRegistry.getAvailable() as Array<{
+				provider: string;
+				id: string;
+				contextWindow?: number;
+			}>;
+			const found = available.find(
+				(m) => m.provider === provider && m.id === modelId,
+			);
+			if (found?.contextWindow) return found.contextWindow;
+		} catch {
+			// ignore
+		}
+	}
+
+	return undefined;
+}
+
+// ── Extension ──────────────────────────────────────────────────
+
+export default function routerBridgeExtension(pi: ExtensionAPI) {
+	let currentRoutedModel: RoutedModel | undefined;
+	let currentRouteId: string | undefined;
+	let latestCtx: ExtensionContext | undefined;
+
+	/** Read the cached context window for the current routed model */
+	function getCachedContextWindow(): number | undefined {
+		if (!currentRoutedModel) return undefined;
+		return resolveContextWindow(
+			currentRoutedModel.provider,
+			currentRoutedModel.modelId,
+			(latestCtx as any)?.modelRegistry,
+		);
+	}
+
+	/** Try to refresh routed model info from auto-router's globalThis API */
+	function refreshRoutedModel(): void {
+		if (!currentRouteId) return;
+
+		const router = (globalThis as Record<string, unknown>)
+			.__piCacheOptimizerRouter as {
+			getRoutedModel?: (id: string) => RoutedModel | undefined;
+		} | undefined;
+
+		if (router?.getRoutedModel) {
+			const result = router.getRoutedModel(currentRouteId);
+			if (result) {
+				currentRoutedModel = result;
+			}
+		}
+	}
+
+	// ── Bridge API (exposed via globalThis) ────────────────────
+
+	const bridge: RouterBridgeAPI = {
+		getRoutedModel(): RoutedModel | undefined {
+			return currentRoutedModel;
+		},
+
+		getActualContextWindow(): number | undefined {
+			return getCachedContextWindow();
+		},
+
+		getActualPercent(): number | undefined {
+			const actualCtxWin = getCachedContextWindow();
+			if (!actualCtxWin || !latestCtx) return undefined;
+
+			const usage = latestCtx.getContextUsage?.();
+			if (!usage) return undefined;
+
+			// usage.percent is based on the virtual model's contextWindow.
+			// We need the raw token count to recalculate.
+			// getContextUsage() may return { percent, used, total } or just { percent }.
+			// If `used` is available, use it; otherwise derive from percent + virtual contextWindow.
+			const used = (usage as any).used as number | undefined;
+			if (typeof used === "number" && used > 0) {
+				return Math.min(100, Math.round((used / actualCtxWin) * 100));
+			}
+
+			// Fallback: derive from percent + virtual contextWindow
+			const virtualCtxWin = latestCtx.model?.contextWindow;
+			if (virtualCtxWin && usage.percent != null) {
+				const derivedUsed = (usage.percent / 100) * virtualCtxWin;
+				return Math.min(
+					100,
+					Math.round((derivedUsed / actualCtxWin) * 100),
+				);
+			}
+
+			return undefined;
+		},
+
+		getContextWindowLabel(): string | undefined {
+			const ctxWin = getCachedContextWindow();
+			return ctxWin ? humanReadable(ctxWin) : undefined;
+		},
+	};
+
+	// Expose on globalThis
+	(globalThis as Record<string, unknown>).__piRouterBridge = bridge;
+
+	// ── Event listeners ────────────────────────────────────────
+
+	pi.on("session_start", async (_event, ctx) => {
+		latestCtx = ctx;
+		currentRoutedModel = undefined;
+		currentRouteId = undefined;
+	});
+
+	pi.on("model_select", async (_event, ctx) => {
+		latestCtx = ctx;
+		const model = ctx.model;
+
+		if (model?.provider === "auto-router") {
+			currentRouteId = model.id;
+			refreshRoutedModel();
+		} else {
+			currentRouteId = undefined;
+			currentRoutedModel = undefined;
+		}
+	});
+
+	// After a turn completes, the routing decision is finalized
+	pi.on("turn_end", async () => {
+		refreshRoutedModel();
+	});
+
+	// Also refresh when an agent turn starts (early update for routing decision)
+	pi.on("agent_start", async () => {
+		refreshRoutedModel();
+	});
+}
