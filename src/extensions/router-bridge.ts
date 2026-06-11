@@ -40,9 +40,11 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 
 // ── Logging (debug only) ──────────────────────────────────────
 
+const DEBUG_ENABLED = !!process.env.ROUTER_BRIDGE_DEBUG;
 const LOG_FILE = path.join(os.homedir(), ".pi", "agent", "extensions", "router-bridge.debug.log");
 
 function log(...args: any[]) {
+	if (!DEBUG_ENABLED) return;
 	try {
 		fs.appendFileSync(LOG_FILE, `[${new Date().toISOString()}] ${args.join(" ")}\n`);
 	} catch { /* best-effort */ }
