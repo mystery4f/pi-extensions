@@ -245,3 +245,23 @@ function humanReadable(n: number): string {
 	if (n >= 1_000) return `${Math.round(n / 1_000)}k`;
 	return `${n}`;
 }
+
+// ── Zhipu retryable error hook ───────────────────────────────
+// Extend auto-router's isRetryableError via global hook.
+// Returns boolean for a decision, undefined to delegate to auto-router's built-in.
+
+(function registerRetryableErrorHook() {
+	const EXTRA_PATTERNS = [
+		"rate_limit_error",  // zhipu error type (underscore, not in built-in "rate limit")
+		"\u5df2\u8fbe\u5230",           // "已达到"  (reached, for usage/rate limit)
+		"\u4f7f\u7528\u4e0a\u9650",     // "使用上限" (usage limit)
+		"\u9650\u989d\u5c06\u5728",     // "限额将在" (quota will [reset at])
+	];
+
+	(globalThis as any).__piAutoRouter_isRetryableError = (message: any): boolean | undefined => {
+		const text = String(message ?? "");
+		if (!text) return undefined;
+		if (EXTRA_PATTERNS.some((p) => text.includes(p))) return true;
+		return undefined; // delegate to auto-router built-in
+	};
+})();
