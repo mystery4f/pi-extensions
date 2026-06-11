@@ -142,13 +142,22 @@ export default function routerBridgeExtension(pi: ExtensionAPI) {
 
 	/** Resolve the context window for the currently routed model */
 	function resolveActualContextWindow(): number | undefined {
-		const model = getLatestRoutedModel();
-		if (!model) return undefined;
-		return resolveContextWindow(
-			model.provider,
-			model.modelId,
-			(latestCtx as any)?.modelRegistry,
-		);
+		// If auto-router is active, try the routed model first
+		if (currentRouteId) {
+			const routed = getLatestRoutedModel();
+			if (routed) {
+				const cw = resolveContextWindow(
+					routed.provider,
+					routed.modelId,
+					latestCtx?.modelRegistry,
+				);
+				if (cw) return cw;
+			}
+		}
+
+		// Fallback: use the current model's own contextWindow
+		// (works for non-auto-router models and un-routed routes)
+		return latestCtx?.model?.contextWindow;
 	}
 
 	// ── Bridge API (exposed via globalThis) ────────────────────
