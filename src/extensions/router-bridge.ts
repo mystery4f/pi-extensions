@@ -207,11 +207,10 @@ export default function routerBridgeExtension(pi: ExtensionAPI) {
 
 	pi.on("session_start", async (_event, ctx) => {
 		latestCtx = ctx;
-		currentRouteId = undefined;
-		targetsLoaded = false;
+		currentRouteId = ctx.model?.provider === "auto-router" ? ctx.model.id : undefined;
 		firstTargets = loadFirstTargets();
 		targetsLoaded = true;
-		log(`session_start: model=${ctx.model?.provider}/${ctx.model?.id}, routes=${firstTargets.size}`);
+		log(`session_start: model=${ctx.model?.provider}/${ctx.model?.id}, routeId=${currentRouteId}, routes=${firstTargets.size}`);
 	});
 
 	pi.on("model_select", async (event, ctx) => {
