@@ -33,6 +33,9 @@
  *   ```
  */
 
+import * as fs from "node:fs";
+import * as path from "node:path";
+import * as os from "node:os";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 // Lazy reference to @earendil-works/pi-ai — resolved at runtime in the bun environment.
@@ -122,8 +125,13 @@ function resolveContextWindow(
 
 // ── Extension ──────────────────────────────────────────────────
 
+const LOG_FILE = path.join(os.homedir(), ".pi", "agent", "extensions", "router-bridge.debug.log");
+
 function dbg(...args: any[]) {
-	process.stderr.write(`[router-bridge] ${args.join(" ")}\n`);
+	try {
+		const line = `[${new Date().toISOString()}] ${args.join(" ")}\n`;
+		fs.appendFileSync(LOG_FILE, line);
+	} catch { /* best-effort */ }
 }
 
 let _callSeq = 0;
