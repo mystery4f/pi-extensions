@@ -169,17 +169,15 @@ export default function routerBridgeExtension(pi: ExtensionAPI) {
 			const usage = latestCtx.getContextUsage?.();
 			if (!usage) return undefined;
 
-			// usage.percent is based on the virtual model's contextWindow.
-			// We need the raw token count to recalculate.
-			// getContextUsage() may return { percent, used, total } or just { percent }.
-			// If `used` is available, use it; otherwise derive from percent + virtual contextWindow.
-			const used = (usage as any).used as number | undefined;
-			if (typeof used === "number" && used > 0) {
-				return Math.min(100, Math.round((used / actualCtxWin) * 100));
+			// Prefer the raw token count for accuracy.
+			// ContextUsage.tokens is the estimated used tokens (may be null after compaction).
+			const usedTokens = usage.tokens;
+			if (typeof usedTokens === "number" && usedTokens > 0) {
+				return Math.min(100, Math.round((usedTokens / actualCtxWin) * 100));
 			}
 
-			// Fallback: derive from percent + virtual contextWindow
-			const virtualCtxWin = latestCtx.model?.contextWindow;
+			// Fallback: derive token count from percent × contextWindow
+			const virtualCtxWin = usage.contextWindow;
 			if (virtualCtxWin && usage.percent != null) {
 				const derivedUsed = (usage.percent / 100) * virtualCtxWin;
 				return Math.min(
