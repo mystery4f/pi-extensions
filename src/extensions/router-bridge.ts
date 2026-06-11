@@ -14,8 +14,8 @@
  * Solution:
  *   1. Listen to pi events to track which underlying model was actually routed.
  *   2. Resolve the real contextWindow from the model registry.
- *   3. Expose `globalThis.__piRouterBridge` with simple accessor methods.
- *   4. pi-bar's config.toml can use these in custom eval expressions.
+ *   3. Fallback to route's first target when no routing decision yet.
+ *   4. Expose `globalThis.__piRouterBridge` with simple accessor methods.
  *
  * Usage in pi-bar config.toml:
  *   ```toml
@@ -38,15 +38,14 @@ import * as path from "node:path";
 import * as os from "node:os";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-// Lazy reference to @earendil-works/pi-ai — resolved at runtime in the bun environment.
-// We use dynamic require() (supported by bun) to avoid top-level import issues
-// with peer dependencies that may not be installed during typecheck.
-let _piAi: any = undefined;
-function getPiAi(): any {
-	if (!_piAi) {
-		try { _piAi = require("@earendil-works/pi-ai"); } catch { _piAi = null; }
-	}
-	return _piAi;
+// ── Logging (debug only) ──────────────────────────────────────
+
+const LOG_FILE = path.join(os.homedir(), ".pi", "agent", "extensions", "router-bridge.debug.log");
+
+function log(...args: any[]) {
+	try {
+		fs.appendFileSync(LOG_FILE, `[${new Date().toISOString()}] ${args.join(" ")}\n`);
+	} catch { /* best-effort */ }
 }
 
 // ── Types ──────────────────────────────────────────────────────
@@ -70,222 +69,178 @@ export interface RouterBridgeAPI {
 	getContextWindowLabel(): string | undefined;
 }
 
-// ── Helpers ────────────────────────────────────────────────────
+// ── Route config helpers ──────────────────────────────────────
+
+const ROUTES_CONFIG_PATH = path.join(os.homedir(), ".pi", "agent", "extensions", "auto-router.routes.json");
+
+function loadFirstTargets(): Map<string, { provider: string; modelId: string }> {
+	const map = new Map<string, { provider: string; modelId: string }>();
+	try {
+		const content = JSON.parse(fs.readFileSync(ROUTES_CONFIG_PATH, "utf-8"));
+		const routes: Record<string, any> = content.routes;
+		if (!routes || typeof routes !== "object") return map;
+		for (const [routeId, def] of Object.entries(routes)) {
+			const targets: any[] = def?.targets;
+			if (!Array.isArray(targets) || targets.length === 0) continue;
+			const first = targets[0];
+			if (first?.provider && first?.modelId) {
+				map.set(routeId, { provider: first.provider, modelId: first.modelId });
+			}
+		}
+	} catch { /* routes file missing or unparseable */ }
+	return map;
+}
+
+// ── Extension ──────────────────────────────────────────────────
+
+export default function routerBridgeExtension(pi: ExtensionAPI) {
+	log("extension loaded");
+
+	let currentRouteId: string | undefined;
+	let latestCtx: ExtensionContext | undefined;
+	let firstTargets = new Map<string, { provider: string; modelId: string }>();
+	let targetsLoaded = false;
+
+	// ── Helpers ──────────────────────────────────────────────
+
+	/** Find a model's contextWindow in the modelRegistry by provider + id. */
+	function findCtxInRegistry(provider: string, modelId: string): number | undefined {
+		if (!latestCtx?.modelRegistry?.getAvailable) return undefined;
+		try {
+			const available = latestCtx.modelRegistry.getAvailable() as Array<{ provider: string; id: string; contextWindow?: number }>;
+			const found = available.find(m => m.provider === provider && m.id === modelId);
+			return found?.contextWindow;
+		} catch {
+			return undefined;
+		}
+	}
+
+	/** Read the last routing decision from auto-router (via globalThis hook). */
+	function getRoutedModel(): RoutedModel | undefined {
+		if (!currentRouteId) return undefined;
+		try {
+			return (globalThis as any).__piCacheOptimizerRouter?.getRoutedModel?.(currentRouteId) as RoutedModel | undefined;
+		} catch {
+			return undefined;
+		}
+	}
+
+	/**
+	 * Resolve the effective contextWindow with 3-level fallback:
+	 *
+	 * 1. Routing decision exists → use the routed model's contextWindow
+	 * 2. No routing decision, but route's first target known → resolve its contextWindow
+	 * 3. Everything else → use the current (virtual) model's contextWindow
+	 */
+	function resolveCtxWindow(): number | undefined {
+		// Level 1: routed model (after auto-router made a decision)
+		if (currentRouteId) {
+			const routed = getRoutedModel();
+			if (routed) {
+				const cw = findCtxInRegistry(routed.provider, routed.modelId);
+				if (cw) return cw;
+				log(`resolveCtxWindow: routed model ${routed.provider}/${routed.modelId} not found in registry`);
+			}
+
+			// Level 2: first target of the route (no decision yet, show the default)
+			const first = firstTargets.get(currentRouteId);
+			if (first) {
+				const cw = findCtxInRegistry(first.provider, first.modelId);
+				if (cw) return cw;
+				log(`resolveCtxWindow: first target ${first.provider}/${first.modelId} not found in registry`);
+			}
+		}
+
+		// Level 3: current (virtual) model's own contextWindow
+		return latestCtx?.model?.contextWindow;
+	}
+
+	// ── Bridge API ───────────────────────────────────────────
+
+	const bridge: RouterBridgeAPI = {
+		getRoutedModel(): RoutedModel | undefined {
+			return getRoutedModel();
+		},
+
+		getActualContextWindow(): number | undefined {
+			return resolveCtxWindow();
+		},
+
+		getActualPercent(): number | undefined {
+			const ctxWin = resolveCtxWindow();
+			if (!ctxWin || !latestCtx) return undefined;
+
+			const usage = latestCtx.getContextUsage?.();
+			if (!usage) return undefined;
+
+			log(`getActualPercent: ctxWin=${ctxWin}, tokens=${usage.tokens}, usage.cw=${usage.contextWindow}, usage.percent=${usage.percent}`);
+
+			// Path A: exact token count (most accurate)
+			if (typeof usage.tokens === "number" && usage.tokens > 0) {
+				const pct = Math.min(100, Math.round((usage.tokens / ctxWin) * 100));
+				log(`getActualPercent: tokens path => ${pct}%`);
+				return pct;
+			}
+
+			// Path B: derive from percent × contextWindow
+			if (usage.contextWindow && usage.percent != null) {
+				const derived = (usage.percent / 100) * usage.contextWindow;
+				const pct = Math.min(100, Math.round((derived / ctxWin) * 100));
+				log(`getActualPercent: fallback path => ${pct}%`);
+				return pct;
+			}
+
+			return undefined;
+		},
+
+		getContextWindowLabel(): string | undefined {
+			const ctxWin = resolveCtxWindow();
+			const label = ctxWin ? humanReadable(ctxWin) : undefined;
+			log(`getContextWindowLabel() => ${label}`);
+			return label;
+		},
+	};
+
+	(globalThis as any).__piRouterBridge = bridge;
+
+	// ── Event listeners ──────────────────────────────────────
+
+	pi.on("session_start", async (_event, ctx) => {
+		latestCtx = ctx;
+		currentRouteId = undefined;
+		targetsLoaded = false;
+		firstTargets = loadFirstTargets();
+		targetsLoaded = true;
+		log(`session_start: model=${ctx.model?.provider}/${ctx.model?.id}, routes=${firstTargets.size}`);
+	});
+
+	pi.on("model_select", async (event, ctx) => {
+		latestCtx = ctx;
+		currentRouteId = event.model?.provider === "auto-router" ? event.model.id : undefined;
+		if (!targetsLoaded) {
+			firstTargets = loadFirstTargets();
+			targetsLoaded = true;
+		}
+
+		const usage = ctx.getContextUsage?.();
+		const first = currentRouteId ? firstTargets.get(currentRouteId) : undefined;
+		log(
+			`model_select: model=${event.model?.provider}/${event.model?.id}, ` +
+			`prev=${event.previousModel?.provider}/${event.previousModel?.id}, ` +
+			`source=${event.source}, ` +
+			`routeId=${currentRouteId}, ` +
+			`firstTarget=${first?.provider}/${first?.modelId}, ` +
+			`ctx.cw=${ctx.model?.contextWindow}, ` +
+			`usage.tokens=${usage?.tokens}, usage.pct=${usage?.percent}`
+		);
+	});
+}
+
+// ── Standalone helpers ────────────────────────────────────────
 
 function humanReadable(n: number): string {
 	if (n >= 1_000_000)
 		return `${(n / 1_000_000).toFixed(n % 1_000_000 === 0 ? 0 : 1)}M`;
 	if (n >= 1_000) return `${Math.round(n / 1_000)}k`;
 	return `${n}`;
-}
-
-/**
- * Resolve contextWindow from the model registry.
- * Searches both built-in providers (via getModel) and custom providers
- * (via ctx.modelRegistry).
- */
-function resolveContextWindow(
-	provider: string,
-	modelId: string,
-	modelRegistry?: any,
-): number | undefined {
-	// Method 1: pi-ai built-in providers
-	try {
-		const piAi = getPiAi();
-		if (piAi?.getModel) {
-			const model = piAi.getModel(provider, modelId) as { contextWindow?: number } | undefined;
-			if (model?.contextWindow) return model.contextWindow;
-		}
-	} catch {
-		// getModel may throw for unknown providers
-	}
-
-	// Method 2: modelRegistry from ExtensionContext
-	if (
-		modelRegistry &&
-		typeof modelRegistry.getAvailable === "function"
-	) {
-		try {
-			const available = modelRegistry.getAvailable() as Array<{
-				provider: string;
-				id: string;
-				contextWindow?: number;
-			}>;
-			const found = available.find(
-				(m) => m.provider === provider && m.id === modelId,
-			);
-			if (found?.contextWindow) return found.contextWindow;
-		} catch {
-			// ignore
-		}
-	}
-
-	return undefined;
-}
-
-// ── Extension ──────────────────────────────────────────────────
-
-const LOG_FILE = path.join(os.homedir(), ".pi", "agent", "extensions", "router-bridge.debug.log");
-
-function dbg(...args: any[]) {
-	try {
-		const line = `[${new Date().toISOString()}] ${args.join(" ")}\n`;
-		fs.appendFileSync(LOG_FILE, line);
-	} catch { /* best-effort */ }
-}
-
-let _callSeq = 0;
-
-function seq(): number {
-	return ++_callSeq;
-}
-
-export default function routerBridgeExtension(pi: ExtensionAPI) {
-	dbg("extension loaded");
-
-	let currentRouteId: string | undefined;
-	let latestCtx: ExtensionContext | undefined;
-
-	/** Read the latest routed model directly from auto-router (no cache) */
-	function getLatestRoutedModel(): RoutedModel | undefined {
-		if (!currentRouteId) {
-			dbg(`#${seq()} getLatestRoutedModel: no currentRouteId`);
-			return undefined;
-		}
-		try {
-			const router = (globalThis as Record<string, unknown>)
-				.__piCacheOptimizerRouter as {
-				getRoutedModel?: (id: string) => RoutedModel | undefined;
-			} | undefined;
-			const result = router?.getRoutedModel?.(currentRouteId);
-			dbg(`#${seq()} getLatestRoutedModel(routeId=${currentRouteId}) => ${JSON.stringify(result)}`);
-			return result;
-		} catch (e) {
-			dbg(`#${seq()} getLatestRoutedModel error: ${e}`);
-			return undefined;
-		}
-	}
-
-	/** Resolve the context window for the currently routed model */
-	function resolveActualContextWindow(): number | undefined {
-		// If auto-router is active, try the routed model first
-		if (currentRouteId) {
-			const routed = getLatestRoutedModel();
-			if (routed) {
-				const cw = resolveContextWindow(
-					routed.provider,
-					routed.modelId,
-					latestCtx?.modelRegistry,
-				);
-				if (cw) {
-					dbg(`#${seq()} resolveActualContextWindow: routed cw=${cw} (${routed.provider}/${routed.modelId})`);
-					return cw;
-				}
-				dbg(`#${seq()} resolveActualContextWindow: routed model found but no contextWindow (${routed.provider}/${routed.modelId})`);
-			}
-		}
-
-		// Fallback: use the current model's own contextWindow
-		const fallback = latestCtx?.model?.contextWindow;
-		dbg(`#${seq()} resolveActualContextWindow: fallback cw=${fallback} (model=${latestCtx?.model?.provider}/${latestCtx?.model?.id})`);
-		return fallback;
-	}
-
-	// ── Bridge API (exposed via globalThis) ────────────────────
-
-	const bridge: RouterBridgeAPI = {
-		getRoutedModel(): RoutedModel | undefined {
-			return getLatestRoutedModel();
-		},
-
-		getActualContextWindow(): number | undefined {
-			const cw = resolveActualContextWindow();
-			dbg(`#${seq()} getActualContextWindow() => ${cw}`);
-			return cw;
-		},
-
-		getActualPercent(): number | undefined {
-			const s = seq();
-			const actualCtxWin = resolveActualContextWindow();
-			if (!actualCtxWin || !latestCtx) {
-				dbg(`#${s} getActualPercent: no actualCtxWin or latestCtx`);
-				return undefined;
-			}
-
-			const usage = latestCtx.getContextUsage?.();
-			if (!usage) {
-				dbg(`#${s} getActualPercent: no usage`);
-				return undefined;
-			}
-
-			dbg(`#${s} getActualPercent: actualCtxWin=${actualCtxWin}, usage.tokens=${usage.tokens}, usage.contextWindow=${usage.contextWindow}, usage.percent=${usage.percent}`);
-
-			// Prefer the raw token count for accuracy.
-			// ContextUsage.tokens is the estimated used tokens (may be null after compaction).
-			const usedTokens = usage.tokens;
-			if (typeof usedTokens === "number" && usedTokens > 0) {
-				const pct = Math.min(100, Math.round((usedTokens / actualCtxWin) * 100));
-				dbg(`#${s} getActualPercent: tokens path => ${pct}%`);
-				return pct;
-			}
-
-			// Fallback: derive token count from percent × contextWindow
-			const virtualCtxWin = usage.contextWindow;
-			if (virtualCtxWin && usage.percent != null) {
-				const derivedUsed = (usage.percent / 100) * virtualCtxWin;
-				const pct = Math.min(
-					100,
-					Math.round((derivedUsed / actualCtxWin) * 100),
-				);
-				dbg(`#${s} getActualPercent: fallback path => ${pct}% (derivedUsed=${derivedUsed})`);
-				return pct;
-			}
-
-			dbg(`#${s} getActualPercent: no data`);
-			return undefined;
-		},
-
-		getContextWindowLabel(): string | undefined {
-			const ctxWin = resolveActualContextWindow();
-			const label = ctxWin ? humanReadable(ctxWin) : undefined;
-			dbg(`#${seq()} getContextWindowLabel() => ${label}`);
-			return label;
-		},
-	};
-
-	// Expose on globalThis
-	(globalThis as Record<string, unknown>).__piRouterBridge = bridge;
-
-	// ── Event listeners ────────────────────────────────────────
-
-	pi.on("session_start", async (_event, ctx) => {
-		latestCtx = ctx;
-		currentRouteId = undefined;
-		dbg(`session_start: model=${ctx.model?.provider}/${ctx.model?.id}`);
-	});
-
-	pi.on("model_select", async (event, ctx) => {
-		latestCtx = ctx;
-		const model = ctx.model;
-		const prev = event.previousModel;
-		let newRouteId: string | undefined;
-
-		if (model?.provider === "auto-router") {
-			newRouteId = model.id;
-		} else {
-			newRouteId = undefined;
-		}
-
-		currentRouteId = newRouteId;
-
-		const usage = ctx.getContextUsage?.();
-		dbg(
-			`model_select: model=${model?.provider}/${model?.id}, ` +
-			`prev=${prev?.provider}/${prev?.id}, ` +
-			`source=${event.source}, ` +
-			`currentRouteId=${currentRouteId}, ` +
-			`ctx.model.cw=${ctx.model?.contextWindow}, ` +
-			`usage.tokens=${usage?.tokens}, usage.cw=${usage?.contextWindow}, usage.pct=${usage?.percent}`
-		);
-	});
 }
