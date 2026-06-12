@@ -10,6 +10,58 @@ A collection of [Pi coding agent](https://github.com/earendil-works/pi-coding-ag
 |---|---|
 | [extra-agents-files](#extra-agents-files) | 按标签条件加载额外的上下文文件到 system prompt |
 | [auto-add-dir](#auto-add-dir) | 检测用户输入中的关键词，自动将对应目录加入会话 |
+| [patch](#patch) | 精确字符串替换文件编辑工具，支持锚点定位和 diff 预览 |
+| [codegraph-guidance](#codegraph-guidance) | 检测 codegraph MCP 工具并注入使用指南到 system prompt |
+
+---
+
+### patch
+
+精确字符串替换文件编辑工具，替代 pi 原生的 `edit`/`write`。支持锚点（anchor）定位、多编辑批量应用、diff 预览。
+
+> **来源**：迁移自 [lcwecker/decorated-pi](https://github.com/lcwecker/decorated-pi)，原项目采用 MIT 协议。
+
+**特性**：
+
+- ✏️ **精确字符串替换** — `old_str` / `new_str` 精确匹配，不使用正则或模糊匹配
+- ⚓ **锚点定位** — 可选 `anchor` 参数缩小搜索范围，用于 `old_str` 不唯一时
+- 📦 **批量编辑** — 单次调用可应用多个编辑（`edits[]`），自动检测冲突和重叠
+- 🔄 **原子覆写** — 支持 `overwrite: true` + `new_str` 原子替换整个文件
+- 📊 **diff 预览** — TUI 中实时显示 unified diff，可折叠/展开
+- 🔗 **链式编辑** — 后续编辑可引用前序编辑的输出，自动回退到顺序模式
+- 🛡️ **模糊匹配降级** — 精确匹配失败时尝试 tab/space/尾部空白容错匹配
+
+**用法示例**：
+
+```
+# 基本替换
+{ path: "src/foo.ts", edits: [{ old_str: "return 1", new_str: "return 42" }] }
+
+# 带锚点的替换
+{ path: "src/foo.ts", edits: [{ anchor: "function bar() {", old_str: "return x", new_str: "return x + 1" }] }
+
+# 多编辑批量
+{ path: "src/foo.ts", edits: [
+  { anchor: "function init() {", old_str: "const DEBUG = true;", new_str: "const DEBUG = false;" },
+  { old_str: "log(\"debug\");", new_str: "// debug disabled" }
+] }
+```
+
+---
+
+### codegraph-guidance
+
+自动检测 codegraph MCP 工具是否可用，并在 system prompt 中注入高效使用指南。引导 LLM 优先使用 `codegraph_explore`、`codegraph_search` 等工具代替 grep/read，提升代码导航效率。
+
+> **来源**：迁移自 [lcwecker/decorated-pi](https://github.com/lcwecker/decorated-pi)，原项目采用 MIT 协议。
+
+**工作原理**：
+
+1. `before_agent_start` 事件中检测已注册的工具名是否有 `codegraph_` 前缀
+2. 如果检测到 codegraph 工具，将使用指南注入 system prompt
+3. 指南包括：何时使用、应避免的操作（如用 grep 替代）、常见错误的处理方式
+
+**前提**：需要在 Pi 的 MCP 配置中启用 codegraph 服务器（如 `mcp.json` 或 settings）。
 
 ---
 
@@ -151,7 +203,11 @@ pi-extensions/
 └── src/
     └── extensions/
         ├── extra-agents-files.ts
-        └── auto-add-dir.ts
+        ├── auto-add-dir.ts
+        ├── patch/
+        │   ├── index.ts    # 工具注册 + TUI 渲染
+        │   └── core.ts     # 编辑逻辑 + diff 生成
+        └── codegraph-guidance.ts
 ```
 
 添加新扩展：在 `src/extensions/` 下新建文件，然后在 `index.ts` 中注册即可。
