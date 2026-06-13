@@ -13,6 +13,6 @@ export default function (pi: ExtensionAPI) {
 	autoAddDir(pi);
 	zhipuProvider(pi);
 	routerBridge(pi);
-	registerPatchTool(pi);
-	codegraphGuidance(pi);
+	// registerPatchTool(pi);
+	// codegraphGuidance(pi);
 }
