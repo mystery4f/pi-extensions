@@ -69,13 +69,13 @@ export default function (pi: ExtensionAPI) {
     name: "batch_patch",
     label: "batch_patch",
     description:
-      "Edit files with batch edits and Codex-style patches. Supports `multi` (array of edits) and `patch` (Codex-style apply_patch) parameters.",
+      "Edit files using exact text replacement. Use `path`/`oldText`/`newText` for a single edit, `multi` for batch edits across one or more files, or `patch` for hunk-based multi-file patches. Every oldText must match a unique region of the original file. Keep oldText as small as possible while still being unique. Do not pad with large unchanged regions.",
     promptSnippet:
-      "Edit files with batch edits and Codex-style patches.",
+      "Make precise file edits with exact text replacement. Supports single, multi, and patch modes.",
     promptGuidelines: [
-      "Use batch_patch for precise changes (old text must match exactly)",
-      "Use the `multi` parameter to apply multiple edits in a single tool call",
-      "Use the `patch` parameter for Codex-style multi-file / hunk-based edits",
+      "Use batch_patch for precise surgical edits (oldText must match exactly)",
+      "Use the `multi` parameter to apply multiple edits across files in a single tool call",
+      "Use the `patch` parameter for hunk-based Add/Update/Delete File patches",
     ],
     parameters: batchPatchSchema,
 
