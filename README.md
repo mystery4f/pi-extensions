@@ -116,32 +116,24 @@ A collection of [Pi coding agent](https://github.com/earendil-works/pi-coding-ag
 
 - 🔍 **关键词匹配** — 不区分大小写，一条规则可配多个关键词
 - ⚡ **无条件规则** — `keywords` 设为空数组 `[]` 时，session 启动即自动触发，无需等待用户输入
-- 🖥️ **自然语言管理** — 直接告诉 AI「加个规则」「删掉规则 1」，AI 自动调用 `manage_auto_add_dir` 工具完成
+- 🖥️ **交互式命令** — 通过 `/auto-add-dir` 命令交互式管理规则（添加/编辑/删除），无需手改配置文件
 - 🧠 **智能注入** — 第一轮通过 system prompt 指令，后续轮次追加用户消息提醒
 - 🛡️ **保底机制** — 自动读取目录下的 `AGENTS.md` / `CLAUDE.md` 作为后备上下文
 - 🔁 **去重** — 同一 session 中每个目录只触发一次
 - 🌍 **变量替换** — `dir` 支持 `${VAR}` 占位符，从 `env.json` 或系统环境变量解析
 - 📝 **调试日志** — 写入 `%TEMP%/auto-add-dir.log`，排查配置问题
 
-**通过自然语言管理（推荐）**：
+**通过 /auto-add-dir 命令管理（推荐）**：
 
-直接告诉 AI 你想做什么，无需任何命令或配置文件：
-
-```
-用户：「帮我加个规则，提到 obsidian 时加载笔记目录」
-用户：「改下规则 1 的描述」
-用户：「删掉 walmart 那条规则」
-用户：「看看现在有哪些规则」
+```;
+/auto-add-dir            → 主菜单（添加 / 列出编辑 / 重载）
+/auto-add-dir add        → 直接添加
+/auto-add-dir list       → 列出并编辑
+/auto-add-dir reload     → 重新加载
 ```
 
-AI 会自动调用 `manage_auto_add_dir` 工具完成操作，立即生效。
-
-**Slash 命令（轻量只读）**：
-
-```
-/auto-add-dir            → 显示规则列表
-/auto-add-dir reload     → 重新加载配置
-```
+添加规则交互式填写目录路径（支持 `${ENV_VAR}`）、描述、关键词（逗号分隔），选择保存到全局或项目。
+编辑时每个字段显示当前值，输入新值直接保存，空输入跳过。
 
 **手动配置** (`~/.pi/agent/settings.json` → `"autoAddDir"` 字段)：
 
