@@ -65,6 +65,75 @@ A collection of [Pi coding agent](https://github.com/earendil-works/pi-coding-ag
 
 ---
 
+### router-bridge
+
+桥接 `pi-auto-router` 和 `pi-bar`，提供两项能力：
+
+1. **准确的上下文使用率显示** — 解析 auto-router 实际路由到的底层模型，让 pi-bar 的 meter 段显示真正的 context window 和百分比，而不是虚拟模型的错误数值
+2. **限流快速 fallthrough** — 通过暴露 `__piAutoRouter_onTargetError` hook，让特定 provider（如 opencode）在返回 429/限流错误时**立即跳过**，不等超时、不重试
+
+> **依赖**：需要安装 `pi-auto-router` 扩展配合使用。
+
+**特性**：
+
+- 📊 **3 层 fallback 解析 context window** — 实际路由模型 → route 第一目标 → 虚拟模型自身
+- ⚡ **opencode 429 快速跳过** — opencode-go-1/opencode-go-2 返回 429 时立即 fallthrough 到下一个 target
+- 🔧 **可扩展的 error hook** — 通过 `__piAutoRouter_onTargetError` 接口，新增 provider 策略只需改 router-bridge
+- 🀄 **中文限流模式匹配** — 内置中文限流关键词检测（频率过高、限流、配额不足等），覆盖智谱/DeepSeek/Moonshot 等国内 provider
+- 📝 **调试日志** — 设置 `ROUTER_BRIDGE_DEBUG=1` 写入 `~/.pi/agent/extensions/router-bridge.debug.log`
+
+**暴露的全局接口**：
+
+| Hook | 签名 | 用途 |
+|---|---|---|
+| `__piRouterBridge` | `{ getRoutedModel, getActualPercent, getContextWindowLabel, getTargetTimeoutMs }` | pi-bar 读取真实的 context window |
+| `__piAutoRouter_isRetryableError` | `(message: any) => boolean \| undefined` | 扩展 auto-router 的 retryable 判断（中文模式等） |
+| `__piAutoRouter_onTargetError` | `(provider: string, error: any, target: any) => "skip" \| undefined` | **返回 `"skip"` 强制 fallthrough**，用于 opencode 等需要快速跳过的 provider |
+
+**opencode 429 快速 fallthrough 流程**：
+
+```
+opencode-go-1 返回 { status: 429, errorMessage: "..." }
+  ↓
+tryTarget 调用 __piAutoRouter_onTargetError("opencode-go-1", error)
+  ↓
+router-bridge 检测: provider 是 opencode + status === 429
+  ↓
+返回 "skip"
+  ↓
+tryTarget 立即 retryableFailure → 主循环 continue → 下一个 LLM
+```
+
+**添加新 provider 的快速 fallthrough 策略**（在 `router-bridge.ts` 中）：
+
+```typescript
+// 在 __piAutoRouter_onTargetError hook 中添加条件：
+if (provider === "your-provider") {
+    const status = error?.status ?? error?.statusCode;
+    if (status === 429) return "skip";
+    // 或者匹配消息关键词：
+    if (String(error?.errorMessage ?? "").includes("your pattern")) return "skip";
+}
+```
+
+**pi-bar 配置示例**（`~/.pi/agent/settings.json`）：
+
+```json
+{
+  "statusbar": {
+    "segments": [
+      {
+        "type": "meter",
+        "value_eval": "globalThis.__piRouterBridge?.getActualPercent() ?? ctx.getContextUsage()?.percent ?? 0",
+        "eval": "(() => { const b = globalThis.__piRouterBridge; const pct = Math.round(value); const cw = b?.getContextWindowLabel() ?? ''; return `${pct}% of ${cw}`; })()"
+      }
+    ]
+  }
+}
+```
+
+---
+
 ### extra-agents-files
 
 根据全局和项目级 `settings.json` 配置，将额外的 Markdown/文本文件注入到 system prompt 中，支持标签过滤。
@@ -217,6 +286,7 @@ pi-extensions/
     └── extensions/
         ├── extra-agents-files.ts
         ├── auto-add-dir.ts
+        ├── router-bridge.ts
         ├── patch/
         │   ├── index.ts    # 工具注册 + TUI 渲染
         │   └── core.ts     # 编辑逻辑 + diff 生成
