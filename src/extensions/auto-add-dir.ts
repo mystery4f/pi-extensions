@@ -162,6 +162,7 @@ function parseRulesFromSettings(
 	settingsPath: string,
 	envJson: Record<string, string>,
 	globalBasePath?: string,
+	origin?: RuleOrigin,
 ): ResolvedRule[] {
 	try {
 		if (!fs.existsSync(settingsPath)) {
@@ -191,6 +192,7 @@ function parseRulesFromSettings(
 					dir: result.dir,
 					dirSource: result.source,
 					description: rule.description,
+					origin: origin ?? "global",
 				});
 			} else {
 				log(`loadConfig: SKIPPED "${rule.dir}" from ${settingsPath}`);
@@ -208,7 +210,7 @@ function parseRulesFromSettings(
 function loadConfig(cwd?: string): ResolvedConfig {
 	const envJson = loadEnvJson();
 
-	const globalRules = parseRulesFromSettings(SETTINGS_PATH, envJson);
+	const globalRules = parseRulesFromSettings(SETTINGS_PATH, envJson, undefined, "global");
 
 	let globalBasePath: string | undefined;
 	try {
@@ -224,12 +226,12 @@ function loadConfig(cwd?: string): ResolvedConfig {
 	let projectRules: ResolvedRule[] = [];
 	if (cwd) {
 		const projectSettingsPath = path.join(cwd, ".pi", "settings.json");
-		projectRules = parseRulesFromSettings(projectSettingsPath, envJson, globalBasePath);
+		projectRules = parseRulesFromSettings(projectSettingsPath, envJson, globalBasePath, "project");
 	}
 
 	const rulesMap = new Map<string, ResolvedRule>();
-	for (const r of globalRules) rulesMap.set(r.dir, { ...r, origin: "global" });
-	for (const r of projectRules) rulesMap.set(r.dir, { ...r, origin: "project" });
+	for (const r of globalRules) rulesMap.set(r.dir, r);
+	for (const r of projectRules) rulesMap.set(r.dir, r);
 
 	const rules = [...rulesMap.values()];
 	log(`loadConfig: total ${rules.length} rule(s) (global=${globalRules.length}, project=${projectRules.length})`);
