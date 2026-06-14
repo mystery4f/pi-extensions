@@ -694,7 +694,7 @@ export default function autoAddDirExtension(pi: ExtensionAPI) {
 	}
 
 	/**
-	 * 列出所有规则，选择后可编辑
+	 * 列出所有规则，选择后可直接编辑（JSON editor，支持 prefill）
 	 */
 	async function cmdList(ctx: ExtensionCommandContext) {
 		if (config.rules.length === 0) {
@@ -702,7 +702,7 @@ export default function autoAddDirExtension(pi: ExtensionAPI) {
 			return;
 		}
 
-		// 构建规则列表（select 让用户选择）
+		// 构建规则列表
 		const options = config.rules.map((r, i) => {
 			const exists = fs.existsSync(r.dir) ? "✅" : "❌";
 			const originIcon = r.origin === "project" ? "📁" : "🌐";
@@ -722,135 +722,68 @@ export default function autoAddDirExtension(pi: ExtensionAPI) {
 		const idx = m ? parseInt(m[1], 10) - 1 : -1;
 		if (idx < 0 || idx >= config.rules.length) return;
 
-		await editRule(ctx, idx);
-	}
+		const rule = config.rules[idx];
+		const originFull = rule.origin === "project" ? "📁 项目配置" : "🌐 全局配置";
 
-	/**
-	 * 编辑单条规则（循环菜单，可连续修改多个字段）
-	 */
-	async function editRule(ctx: ExtensionCommandContext, idx: number) {
-		let rule = config.rules[idx];
-		let loop = true;
+		// 用 editor 直接编辑 JSON（prefill 当前值，用户看得见、改得准）
+		const jsonStr = JSON.stringify(
+			{
+				dir: rule.dirSource,
+				description: rule.description,
+				...(rule.keywords.length > 0 ? { keywords: rule.keywords } : {}),
+			},
+			null,
+			"\t",
+		);
+		const edited = await ctx.ui.editor(
+			`编辑规则 — ${originFull}`,
+			jsonStr,
+		);
 
-		while (loop) {
-			const kwDisplay = rule.keywords.length
-				? rule.keywords.join(", ")
-				: "(无条件)";
-			const exists = fs.existsSync(rule.dir) ? "✅" : "❌";
-			const originLabel = rule.origin === "project" ? "📁项目" : "🌐全局";
+		// 用户取消或未改动
+		if (edited === undefined || edited.trim() === jsonStr.trim()) return;
 
-			const action = await ctx.ui.select(
-				`编辑规则 [${idx + 1}] — ${rule.description} ${exists} ${originLabel}\n` +
-				`  dir: ${rule.dirSource}\n  keywords: ${kwDisplay}`,
-				[
-					"✏️ 描述",
-					"🏷️ 关键词",
-					"📂 目录路径",
-					"🗑️ 删除此规则",
-					"← 返回",
-				],
-			);
-			if (!action || action.startsWith("←")) return;
-
-			if (action === "🗑️ 删除此规则") {
-				const originFull = rule.origin === "project" ? "📁 项目配置" : "🌐 全局配置";
-				const confirmed = await ctx.ui.confirm(
-					"确认删除",
-					`${rule.description}\n${rule.dirSource}\n来源: ${originFull}`,
-				);
-				if (!confirmed) continue; // 回到编辑菜单
-
-				const settingsPath = rule.origin === "project"
-					? path.join(ctx.cwd, ".pi", "settings.json")
-					: SETTINGS_PATH;
-				const ok = removeRuleFromSettings(settingsPath, rule.dirSource);
-				if (ok) {
-					config = loadConfig(ctx.cwd);
-					discoveredDirs.delete(rule.dir);
-					ctx.ui.notify(
-						`[auto-add-dir] ✅ 已从${originFull}删除\n   剩余 ${config.rules.length} 条规则`,
-						"info",
-					);
-				} else {
-					ctx.ui.notify("[auto-add-dir] ❌ 删除失败", "error");
-				}
-				return;
-			}
-
-			// ── 编辑字段 ──
-			let field: "description" | "keywords" | "dir";
-			let currentVal: string;
-			let hint: string;
-
-			if (action === "✏️ 描述") {
-				field = "description";
-				currentVal = rule.description;
-				hint = "当前: " + rule.description;
-			} else if (action === "🏷️ 关键词") {
-				field = "keywords";
-				currentVal = rule.keywords.join(", ");
-				hint = rule.keywords.length
-					? "当前: " + rule.keywords.join(", ")
-					: "当前: (无条件，留空继续)";
-			} else {
-				field = "dir";
-				currentVal = rule.dirSource;
-				hint = "当前: " + rule.dirSource;
-			}
-
-			const input = await ctx.ui.input(
-				`输入新${field === "description" ? "描述" : field === "keywords" ? "关键词（逗号分隔）" : "目录路径"}`,
-				hint,
-			);
-
-			// 取消或空输入 → 保留原值
-			if (input === undefined || input.trim() === "") continue;
-
-			// 构建更新后的规则
-			const newRule: Rule = {
-				dir: field === "dir" ? input.trim() : rule.dirSource,
-				description: field === "description" ? input.trim() : rule.description,
-			};
-			const newKeywords = field === "keywords"
-				? input.split(/[,，]/).map((s) => s.trim()).filter(Boolean)
-				: rule.keywords;
-			if (newKeywords.length > 0) newRule.keywords = newKeywords;
-
-			// 确认
-			const confirmed = await ctx.ui.confirm(
-				"确认修改",
-				`${hint}\n↓\n${field === "description" ? input.trim() : field === "keywords" ? (newKeywords.join(", ") || "(无条件)") : input.trim()}`,
-			);
-			if (!confirmed) continue;
-
-			// 保存到配置文件
-			const settingsPath = rule.origin === "project"
-				? path.join(ctx.cwd, ".pi", "settings.json")
-				: SETTINGS_PATH;
-
-			// 如果 dir 变了，需要先删除旧规则
-			if (field === "dir" && input.trim() !== rule.dirSource) {
-				removeRuleFromSettings(settingsPath, rule.dirSource);
-			}
-
-			const ok = saveRuleToSettings(settingsPath, newRule);
-			if (!ok) {
-				ctx.ui.notify("[auto-add-dir] ❌ 写入失败", "error");
-				continue;
-			}
-
-			// 热更新
-			config = loadConfig(ctx.cwd);
-			// 刷新当前编辑的 rule 引用
-			const updatedIdx = config.rules.findIndex(
-				(r) => r.dirSource === newRule.dir,
-			);
-			if (updatedIdx >= 0) {
-				rule = config.rules[updatedIdx];
-				idx = updatedIdx;
-			}
-			ctx.ui.notify(`[auto-add-dir] ✅ 已更新`, "info");
+		// 解析 JSON
+		let parsed: { dir?: string; description?: string; keywords?: string[] };
+		try {
+			parsed = JSON.parse(edited);
+		} catch (e) {
+			ctx.ui.notify(`[auto-add-dir] ❌ JSON 格式错误: ${e}`, "error");
+			return;
 		}
+		if (!parsed.dir || !parsed.description) {
+			ctx.ui.notify("[auto-add-dir] ❌ 缺少必填字段 dir 或 description", "error");
+			return;
+		}
+
+		// 构建 Rule
+		const newRule: Rule = { dir: parsed.dir, description: parsed.description };
+		if (Array.isArray(parsed.keywords) && parsed.keywords.length > 0) {
+			newRule.keywords = parsed.keywords;
+		}
+
+		// 保存到对应配置
+		const settingsPath = rule.origin === "project"
+			? path.join(ctx.cwd, ".pi", "settings.json")
+			: SETTINGS_PATH;
+
+		// dir 变了 → 先删旧规则
+		if (parsed.dir !== rule.dirSource) {
+			removeRuleFromSettings(settingsPath, rule.dirSource);
+		}
+
+		const ok = saveRuleToSettings(settingsPath, newRule);
+		if (!ok) {
+			ctx.ui.notify("[auto-add-dir] ❌ 写入失败", "error");
+			return;
+		}
+
+		// 热更新
+		config = loadConfig(ctx.cwd);
+		ctx.ui.notify(
+			`[auto-add-dir] ✅ 规则已更新（共 ${config.rules.length} 条）`,
+			"info",
+		);
 	}
 
 	/**
