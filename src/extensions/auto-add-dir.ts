@@ -16,20 +16,19 @@
  *
  * ── 配置方式 ──
  *
- * 方式一：slash 命令（推荐，无需手改配置文件）
- *   /auto-add-dir               → 弹出交互菜单（添加 / 列出 / 删除 / 重载）
- *   /auto-add-dir add           → 直接进入添加流程
- *   /auto-add-dir list          → 列出所有规则
- *   /auto-add-dir remove        → 选择规则删除
- *   /auto-add-dir reload        → 重新加载配置
+ * 方式一：自然语言（推荐，最自然）
+ *   直接告诉 AI：
+ *     "帮我加个 auto-add-dir 规则，关键词 obsidian，目录 D:\notes"
+ *     "改下规则 1 的描述"
+ *     "删掉 walmart 那条规则"
+ *     "看看现在有哪些规则"
+ *   AI 会自动调用 manage_auto_add_dir 工具完成操作，立即生效。
  *
- *   添加规则时支持交互式填写：
- *     目录路径（支持 ${ENV_VAR}、相对路径）
- *     描述
- *     关键词（逗号分隔，留空=无条件匹配）
- *     保存位置（全局 / 当前项目）
+ * 方式二：slash 命令（轻量只读）
+ *   /auto-add-dir            → 显示规则列表
+ *   /auto-add-dir reload     → 重新加载配置
  *
- * 方式二：手动编辑配置文件
+ * 方式三：手动编辑配置文件
  *   全局: ~/.pi/agent/settings.json → "autoAddDir" 字段
  *   项目: .pi/settings.json → "autoAddDir" 字段（与全局合并，同 dir 时项目优先）
  *
@@ -39,9 +38,11 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type {
-	ExtensionAPI,
-	ExtensionCommandContext,
+import { Type } from "typebox";
+import {
+	defineTool,
+	type ExtensionAPI,
+	type ExtensionCommandContext,
 } from "@earendil-works/pi-coding-agent";
 
 // ── 日志 ───────────────────────────────────────────────────────
@@ -94,7 +95,6 @@ interface ResolvedRule {
 	dir: string;
 	dirSource: string;
 	description: string;
-	/** 规则来源：全局配置 or 项目配置 */
 	origin: RuleOrigin;
 }
 
@@ -166,9 +166,6 @@ interface ResolvedConfig {
 	rules: ResolvedRule[];
 }
 
-/**
- * 解析单个 settings.json 文件中的 autoAddDir 规则
- */
 function parseRulesFromSettings(
 	settingsPath: string,
 	envJson: Record<string, string>,
@@ -189,7 +186,6 @@ function parseRulesFromSettings(
 			return [];
 		}
 
-		// 项目级 basePath 优先，fallback 到全局 basePath
 		const effectiveBasePath = cfg.basePath
 			? resolveDir(cfg.basePath, envJson)?.dir
 			: globalBasePath;
@@ -220,10 +216,8 @@ function parseRulesFromSettings(
 function loadConfig(cwd?: string): ResolvedConfig {
 	const envJson = loadEnvJson();
 
-	// 1. 全局配置
 	const globalRules = parseRulesFromSettings(SETTINGS_PATH, envJson);
 
-	// 提取全局 basePath（供项目级 fallback）
 	let globalBasePath: string | undefined;
 	try {
 		if (fs.existsSync(SETTINGS_PATH)) {
@@ -235,14 +229,12 @@ function loadConfig(cwd?: string): ResolvedConfig {
 		}
 	} catch {}
 
-	// 2. 项目级配置（与全局合并，同 dir 时项目优先）
 	let projectRules: ResolvedRule[] = [];
 	if (cwd) {
 		const projectSettingsPath = path.join(cwd, ".pi", "settings.json");
 		projectRules = parseRulesFromSettings(projectSettingsPath, envJson, globalBasePath);
 	}
 
-	// 3. 合并：以 dir 为 key，项目覆盖全局
 	const rulesMap = new Map<string, ResolvedRule>();
 	for (const r of globalRules) rulesMap.set(r.dir, { ...r, origin: "global" });
 	for (const r of projectRules) rulesMap.set(r.dir, { ...r, origin: "project" });
@@ -252,18 +244,11 @@ function loadConfig(cwd?: string): ResolvedConfig {
 	return { rules };
 }
 
-// ── Config 写入（通过 /auto-add-dir 命令） ─────────────────────────
+// ── Config 写入 ────────────────────────────────────────────────
 
-/**
- * 将一条规则写入 settings.json（保留其他字段）。
- * - 同 dir 的规则会被更新，否则追加。
- * - 确保目标目录存在（如 .pi/）。
- * - 返回 true 表示写入成功。
- */
 function saveRuleToSettings(settingsPath: string, rule: Rule): boolean {
 	let settings: Record<string, any> = {};
 
-	// 读取现有配置（保留其他字段）
 	if (fs.existsSync(settingsPath)) {
 		try {
 			settings = JSON.parse(fs.readFileSync(settingsPath, "utf-8"));
@@ -273,11 +258,9 @@ function saveRuleToSettings(settingsPath: string, rule: Rule): boolean {
 		}
 	}
 
-	// 确保 autoAddDir 结构存在
 	if (!settings.autoAddDir) settings.autoAddDir = {};
 	if (!Array.isArray(settings.autoAddDir.rules)) settings.autoAddDir.rules = [];
 
-	// 检查是否已存在相同 dir 的规则 → 更新；否则追加
 	const idx = settings.autoAddDir.rules.findIndex(
 		(r: any) => r.dir === rule.dir,
 	);
@@ -289,7 +272,6 @@ function saveRuleToSettings(settingsPath: string, rule: Rule): boolean {
 		log(`saveRule: added new rule for "${rule.dir}"`);
 	}
 
-	// 确保目录存在
 	const dir = path.dirname(settingsPath);
 	if (!fs.existsSync(dir)) {
 		try {
@@ -300,7 +282,6 @@ function saveRuleToSettings(settingsPath: string, rule: Rule): boolean {
 		}
 	}
 
-	// 写回（2 空格缩进，与 pi 标准 settings.json 格式一致）
 	try {
 		fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), "utf-8");
 		log(`saveRule: wrote to ${settingsPath}`);
@@ -311,11 +292,6 @@ function saveRuleToSettings(settingsPath: string, rule: Rule): boolean {
 	}
 }
 
-/**
- * 从 settings.json 中删除指定 dir 的规则。
- * - 同时从全局和项目配置中尝试删除。
- * - 返回 true 表示至少一处删除成功。
- */
 function removeRuleFromSettings(settingsPath: string, dirSource: string): boolean {
 	if (!fs.existsSync(settingsPath)) return false;
 
@@ -365,17 +341,9 @@ function readAllContextFiles(
 }
 
 function matchRule(text: string, rule: ResolvedRule): boolean {
-	// 空 keywords = 无条件匹配
 	if (rule.keywords.length === 0) return true;
 	const lower = text.toLowerCase();
 	return rule.keywords.some((kw) => lower.includes(kw.toLowerCase()));
-}
-
-/**
- * 检查路径是否包含未解析的环境变量（${...}）。
- */
-function hasUnresolvedEnvVar(dir: string): boolean {
-	return /\$\{[^}]+\}/.test(dir);
 }
 
 // ── 主扩展 ─────────────────────────────────────────────────────
@@ -384,9 +352,6 @@ export default function autoAddDirExtension(pi: ExtensionAPI) {
 	log(`=== extension loading === EXT_DIR=${EXT_DIR}`);
 	let config = loadConfig();
 	const discoveredDirs = new Map<string, DirContext>();
-
-	// 是否已经在之前的轮次中注入过 system prompt
-	// 用于区分"第一轮匹配"和"中间轮次匹配"
 	let hasInjectedBefore = false;
 
 	// ── 事件监听 ───────────────────────────────────────────────
@@ -396,7 +361,6 @@ export default function autoAddDirExtension(pi: ExtensionAPI) {
 		hasInjectedBefore = false;
 		config = loadConfig(ctx.cwd);
 
-		// 无条件规则（keywords 为空）：session 启动时立即发现
 		const unconditionalRules = config.rules.filter(r => r.keywords.length === 0);
 		for (const rule of unconditionalRules) {
 			if (!discoveredDirs.has(rule.dir) && fs.existsSync(rule.dir)) {
@@ -413,8 +377,6 @@ export default function autoAddDirExtension(pi: ExtensionAPI) {
 		);
 	});
 
-	// input: 检测关键词 + 记录目录
-	// 中间轮次匹配到新目录时，transform 用户消息追加提醒（LLM 遵循率更高）
 	pi.on("input", async (event, _ctx) => {
 		if (event.source === "extension") return { action: "continue" };
 
@@ -430,24 +392,19 @@ export default function autoAddDirExtension(pi: ExtensionAPI) {
 					const dirCtx: DirContext = { rule, contextFiles };
 					discoveredDirs.set(rule.dir, dirCtx);
 					newDirsThisTurn.push(dirCtx);
-					log(
-						`input: loaded [${contextFiles.map((f) => f.filename).join(",")}]`,
-					);
+					log(`input: loaded [${contextFiles.map((f) => f.filename).join(",")}]`);
 				} else {
 					log(`input: dir not found ${rule.dir}`);
 				}
 			}
 		}
 
-		// 中间轮次才匹配到新目录 → transform 用户消息追加提醒
-		// 第一轮不需要，因为 before_agent_start 的 system prompt 注入已经足够
 		if (newDirsThisTurn.length > 0 && hasInjectedBefore) {
 			let reminder =
 				"\n\n---\n" +
 				"⚠️ **[auto-add-dir 检测到新目录]** 请在回答前先调用 `add_directory`：\n";
 			for (const { rule } of newDirsThisTurn) {
-				reminder +=
-					`- \`add_directory\` with path \`${rule.dir}\` — ${rule.description}\n`;
+				reminder += `- \`add_directory\` with path \`${rule.dir}\` — ${rule.description}\n`;
 			}
 			log(`input: appending user message reminder (${newDirsThisTurn.length} new dir(s))`);
 			return { action: "continue", text: event.text + reminder };
@@ -456,20 +413,14 @@ export default function autoAddDirExtension(pi: ExtensionAPI) {
 		return { action: "continue" };
 	});
 
-	// before_agent_start: 在 system prompt 中注入强制指令 + 保底上下文
 	pi.on("before_agent_start", async (event) => {
 		if (discoveredDirs.size === 0) return;
 
-		// 标记已注入过，后续 input 匹配时需要追加用户消息提醒
 		hasInjectedBefore = true;
-
-		log(
-			`before_agent_start: injecting ${discoveredDirs.size} dir(s)`,
-		);
+		log(`before_agent_start: injecting ${discoveredDirs.size} dir(s)`);
 
 		let sp = event.systemPrompt;
 
-		// ── 第一段：强制调用 add_directory 的指令（放在 system prompt 最前面最显眼） ──
 		sp =
 			`\n## MANDATORY: Call add_directory First\n` +
 			`Before answering the user's question, you MUST call the \`add_directory\` tool for each of these directories. ` +
@@ -482,8 +433,6 @@ export default function autoAddDirExtension(pi: ExtensionAPI) {
 
 		sp += `\nDo NOT skip this step. Call add_directory NOW, then proceed.\n\n`;
 
-		// ── 第二段：保底 — CLAUDE.md / AGENTS.md 内容直接注入 ──
-		// 即使 LLM 不调 add_directory，这些内容也已在 system prompt 中可用
 		sp += `---\n## Auto-Loaded Directory Context (Backup)\n`;
 		sp +=
 			"The following context files were pre-loaded. " +
@@ -501,33 +450,196 @@ export default function autoAddDirExtension(pi: ExtensionAPI) {
 		}
 
 		log(`before_agent_start: injection length=${sp.length}`);
-
 		return { systemPrompt: event.systemPrompt + sp };
 	});
 
-	// ── /auto-add-dir slash 命令 ──────────────────────────────
+	// ── registerTool: manage_auto_add_dir ──────────────────────
 	//
-	// 用法：
-	//   /auto-add-dir            → 交互式菜单
-	//   /auto-add-dir add        → 直接进入添加流程
-	//   /auto-add-dir list       → 列出所有规则
-	//   /auto-add-dir remove     → 选择规则删除
-	//   /auto-add-dir reload     → 重新加载配置
-	//   /auto-add-dir help       → 显示帮助
+	// 注册 LLM 可调用的工具，用户用自然语言即可管理规则：
+	//   "帮我加个规则，提到 obsidian 时加载笔记目录"
+	//   "把规则 1 的描述改成 xxx"
+	//   "删掉 walmart 那条规则"
+	//   "看看现在有哪些规则"
+
+	const ManageSchema = Type.Object({
+		action: Type.Union(
+			[Type.Literal("list"), Type.Literal("add"), Type.Literal("edit"), Type.Literal("remove")],
+			{ description: "操作类型：list=列出, add=添加, edit=修改, remove=删除" },
+		),
+		index: Type.Optional(
+			Type.Number({ description: "规则序号（从 1 开始），用于 edit/remove 指定目标规则" }),
+		),
+		dir: Type.Optional(
+			Type.String({ description: "目录路径，支持 ${ENV_VAR}、相对路径。add 时必填，edit 时可修改" }),
+		),
+		description: Type.Optional(
+			Type.String({ description: "规则用途描述。add 时必填，edit 时可修改" }),
+		),
+		keywords: Type.Optional(
+			Type.Array(Type.String(), {
+				description: "触发关键词列表。空数组或省略=无条件匹配（每次都触发）",
+			}),
+		),
+		scope: Type.Optional(
+			Type.Union([Type.Literal("global"), Type.Literal("project")], {
+				description: "保存位置：global=全局配置（默认），project=当前项目配置",
+			}),
+		),
+	});
+
+	pi.registerTool(defineTool({
+		name: "manage_auto_add_dir",
+		label: "Manage Auto-Add-Dir",
+		description: [
+			"Manage auto-add-dir rules (add/edit/remove/list).",
+			"auto-add-dir automatically loads external directories into the session when keywords match.",
+			"",
+			"Actions:",
+			'  list   — Show all rules (no other params needed)',
+			'  add    — Create a new rule (requires dir + description, optional keywords + scope)',
+			'  edit   — Modify an existing rule by index (provide index + fields to change)',
+			'  remove — Delete a rule by index',
+			"",
+			"Examples:",
+			'  { action: "list" }',
+			'  { action: "add", dir: "${NOTES_PATH}", description: "Obsidian Vault", keywords: ["obsidian", "vault"] }',
+			'  { action: "add", dir: "D:\\\\code\\\\project", description: "My Project", keywords: ["project"], scope: "project" }',
+			'  { action: "edit", index: 1, description: "New description" }',
+			'  { action: "edit", index: 2, keywords: ["api", "walmart"], dir: "${WALMART_PATH}" }',
+			'  { action: "remove", index: 1 }',
+		].join("\n"),
+		promptSnippet: "Manage auto-add-dir rules (add/edit/remove/list external directory associations).",
+		promptGuidelines: [
+			"When the user asks to add/edit/remove/list auto-add-dir rules, use manage_auto_add_dir tool.",
+			"User intent examples: '加个规则', '当提到xxx时加载', '改下规则', '删掉规则', '有哪些规则'.",
+		],
+		parameters: ManageSchema,
+		execute: async (_toolCallId, input, _signal, _onUpdate, ctx) => {
+			const cwd: string = ctx.cwd ?? process.cwd();
+			const { action } = input;
+
+			// ── list ──
+			if (action === "list") {
+				config = loadConfig(cwd);
+				if (config.rules.length === 0) {
+					return { content: [{ type: "text" as const, text: "当前没有任何 auto-add-dir 规则。" }] };
+				}
+				const lines = config.rules.map((r, i) => {
+					const kw = r.keywords.length ? r.keywords.join(", ") : "(无条件)";
+					const exists = fs.existsSync(r.dir) ? "✅" : "❌";
+					const origin = r.origin === "project" ? "📁项目" : "🌐全局";
+					return `[${i + 1}] ${origin} ${exists} ${r.description}\n    dir: ${r.dirSource}\n    resolved: ${r.dir}\n    keywords: ${kw}`;
+				});
+				return {
+					content: [{
+						type: "text" as const,
+						text: `共 ${config.rules.length} 条规则:\n\n${lines.join("\n\n")}`,
+					}],
+				};
+			}
+
+			// ── add ──
+			if (action === "add") {
+				if (!input.dir || !input.description) {
+					return { content: [{ type: "text" as const, text: "❌ add 操作需要 dir 和 description 参数。" }] };
+				}
+				const rule: Rule = { dir: input.dir, description: input.description };
+				if (input.keywords && input.keywords.length > 0) rule.keywords = input.keywords;
+
+				const settingsPath = input.scope === "project"
+					? path.join(cwd, ".pi", "settings.json")
+					: SETTINGS_PATH;
+
+				const ok = saveRuleToSettings(settingsPath, rule);
+				if (!ok) return { content: [{ type: "text" as const, text: `❌ 写入失败: ${settingsPath}` }] };
+
+				config = loadConfig(cwd);
+				return {
+					content: [{
+						type: "text" as const,
+						text: `✅ 规则已添加并立即生效（共 ${config.rules.length} 条）\n   dir: ${input.dir}\n   description: ${input.description}\n   keywords: ${input.keywords?.length ? input.keywords.join(", ") : "(无条件)"}\n   scope: ${input.scope === "project" ? "📁 项目" : "🌐 全局"}`,
+					}],
+				};
+			}
+
+			// ── edit ──
+			if (action === "edit") {
+				config = loadConfig(cwd);
+				const idx = (input.index ?? 0) - 1;
+				if (idx < 0 || idx >= config.rules.length) {
+					return { content: [{ type: "text" as const, text: `❌ 无效序号 ${input.index}，当前共 ${config.rules.length} 条规则。` }] };
+				}
+
+				const oldRule = config.rules[idx];
+				const newDir = input.dir ?? oldRule.dirSource;
+				const newDesc = input.description ?? oldRule.description;
+				const newKeywords = input.keywords !== undefined ? input.keywords : oldRule.keywords;
+
+				const newRule: Rule = { dir: newDir, description: newDesc };
+				if (newKeywords.length > 0) newRule.keywords = newKeywords;
+
+				const settingsPath = oldRule.origin === "project"
+					? path.join(cwd, ".pi", "settings.json")
+					: SETTINGS_PATH;
+
+				// dir 变了 → 先删旧规则
+				if (newDir !== oldRule.dirSource) {
+					removeRuleFromSettings(settingsPath, oldRule.dirSource);
+				}
+
+				const ok = saveRuleToSettings(settingsPath, newRule);
+				if (!ok) return { content: [{ type: "text" as const, text: "❌ 写入失败" }] };
+
+				config = loadConfig(cwd);
+				return {
+					content: [{
+						type: "text" as const,
+						text: `✅ 规则 [${input.index}] 已更新\n   dir: ${newDir}\n   description: ${newDesc}\n   keywords: ${newKeywords.length ? newKeywords.join(", ") : "(无条件)"}`,
+					}],
+				};
+			}
+
+			// ── remove ──
+			if (action === "remove") {
+				config = loadConfig(cwd);
+				const idx = (input.index ?? 0) - 1;
+				if (idx < 0 || idx >= config.rules.length) {
+					return { content: [{ type: "text" as const, text: `❌ 无效序号 ${input.index}，当前共 ${config.rules.length} 条规则。` }] };
+				}
+
+				const rule = config.rules[idx];
+				const settingsPath = rule.origin === "project"
+					? path.join(cwd, ".pi", "settings.json")
+					: SETTINGS_PATH;
+
+				const ok = removeRuleFromSettings(settingsPath, rule.dirSource);
+				if (!ok) return { content: [{ type: "text" as const, text: "❌ 删除失败" }] };
+
+				discoveredDirs.delete(rule.dir);
+				config = loadConfig(cwd);
+				return {
+					content: [{
+						type: "text" as const,
+						text: `✅ 已删除规则 [${input.index}] ${rule.description}（剩余 ${config.rules.length} 条）`,
+					}],
+				};
+			}
+
+			return { content: [{ type: "text" as const, text: `❌ 未知操作: ${action}` }] };
+		},
+	}));
+
+	// ── /auto-add-dir slash 命令（轻量只读） ───────────────────
+	// 只提供 list 和 reload，所有写操作通过 manage_auto_add_dir 工具由 AI 完成。
 
 	pi.registerCommand("auto-add-dir", {
-		description: "管理 auto-add-dir 规则（交互式添加/列出/删除/重载）",
+		description: "查看 auto-add-dir 规则列表 / 重载配置（增删改请直接告诉 AI）",
 		getArgumentCompletions: (prefix: string) => {
-			const subcommands = [
-				{ label: "add", desc: "添加新规则（交互式）" },
+			const subs = [
 				{ label: "list", desc: "列出所有规则" },
-				{ label: "remove", desc: "删除规则（交互式选择）" },
 				{ label: "reload", desc: "重新加载配置" },
-				{ label: "help", desc: "显示帮助" },
 			];
-			const matches = subcommands.filter((s) =>
-				s.label.startsWith(prefix),
-			);
+			const matches = subs.filter((s) => s.label.startsWith(prefix));
 			return matches.length > 0
 				? matches.map((s) => ({ value: s.label, label: s.label, description: s.desc }))
 				: null;
@@ -535,340 +647,39 @@ export default function autoAddDirExtension(pi: ExtensionAPI) {
 		handler: async (args: string, ctx: ExtensionCommandContext) => {
 			const subCmd = args.trim().split(/\s+/)[0]?.toLowerCase() || "";
 
-			switch (subCmd) {
-				case "":
-				case "help":
-				case "menu":
-					await showMenu(ctx);
-					break;
-				case "add":
-					await cmdAdd(ctx);
-					break;
-				case "list":
-				case "ls":
-					await cmdList(ctx);
-					break;
-				case "remove":
-				case "rm":
-				case "delete":
-					await cmdRemove(ctx);
-					break;
-				case "reload":
-					cmdReload(ctx);
-					break;
-				default:
-					ctx.ui.notify(
-						`[auto-add-dir] 未知子命令「${subCmd}」。可用: add, list, remove, reload, help`,
-						"warning",
-					);
-			}
-		},
-	});
-
-	// ── 命令处理函数 ───────────────────────────────────────────
-
-	/**
-	 * 显示交互式主菜单
-	 */
-	async function showMenu(ctx: ExtensionCommandContext) {
-		const action = await ctx.ui.select("auto-add-dir 管理", [
-			"➕ 添加规则",
-			"📋 列出规则",
-			"🗑️ 删除规则",
-			"🔄 重新加载配置",
-		]);
-
-		if (!action) return; // 用户取消
-
-		if (action.startsWith("➕")) await cmdAdd(ctx);
-		else if (action.startsWith("📋")) await cmdList(ctx);
-		else if (action.startsWith("🗑️")) await cmdRemove(ctx);
-		else if (action.startsWith("🔄")) cmdReload(ctx);
-	}
-
-	/**
-	 * 交互式添加规则
-	 */
-	async function cmdAdd(ctx: ExtensionCommandContext) {
-		// 1. 输入目录路径
-		const dirInput = await ctx.ui.input(
-			"目录路径",
-			"D:\\code\\my-project 或 ${MY_VAR}/subdir",
-		);
-		if (dirInput === undefined || dirInput.trim() === "") {
-			ctx.ui.notify("[auto-add-dir] 已取消", "info");
-			return;
-		}
-		const dir = dirInput.trim();
-
-		// 路径存在性检查（环境变量路径跳过）
-		if (!hasUnresolvedEnvVar(dir) && !fs.existsSync(dir)) {
-			const proceed = await ctx.ui.confirm(
-				"路径不存在",
-				`「${dir}」不存在或无法访问。是否仍要添加？`,
-			);
-			if (!proceed) {
-				ctx.ui.notify("[auto-add-dir] 已取消", "info");
+			if (subCmd === "reload") {
+				config = loadConfig(ctx.cwd);
+				discoveredDirs.clear();
+				hasInjectedBefore = false;
+				const unconditionalRules = config.rules.filter((r) => r.keywords.length === 0);
+				for (const rule of unconditionalRules) {
+					if (!discoveredDirs.has(rule.dir) && fs.existsSync(rule.dir)) {
+						const contextFiles = readAllContextFiles(rule.dir);
+						discoveredDirs.set(rule.dir, { rule, contextFiles });
+					}
+				}
+				ctx.ui.notify(
+					`[auto-add-dir] 🔄 已重载（${config.rules.length} 条规则，${unconditionalRules.length} 条无条件）`,
+					"info",
+				);
 				return;
 			}
-		}
 
-		// 2. 输入描述
-		const description = await ctx.ui.input(
-			"规则描述",
-			"如「我的前端项目」「Obsidian 笔记库」",
-		);
-		if (description === undefined || description.trim() === "") {
-			ctx.ui.notify("[auto-add-dir] 描述不能为空，已取消", "warning");
-			return;
-		}
-
-		// 3. 输入关键词
-		const kwInput = await ctx.ui.input(
-			"触发关键词（逗号分隔，留空=无条件匹配）",
-			"如 frontend,vue,react（留空则每次都匹配）",
-		);
-		const keywords =
-			kwInput && kwInput.trim()
-				? kwInput
-						.split(/[,，]/)
-						.map((s) => s.trim())
-						.filter(Boolean)
-				: [];
-
-		// 4. 选择保存位置
-		const scopeOptions = [
-			"🌐 全局（所有项目生效）",
-			"📁 当前项目（仅在此目录生效）",
-		];
-		const scope = await ctx.ui.select("保存位置", scopeOptions);
-		if (!scope) {
-			ctx.ui.notify("[auto-add-dir] 已取消", "info");
-			return;
-		}
-
-		const isProject = scope.startsWith("📁");
-		const settingsPath = isProject
-			? path.join(ctx.cwd, ".pi", "settings.json")
-			: SETTINGS_PATH;
-
-		// 5. 确认
-		const kwDisplay = keywords.length
-			? keywords.join(", ")
-			: "(无，每次匹配)";
-		const scopeDisplay = isProject ? "当前项目" : "全局";
-		const confirmed = await ctx.ui.confirm(
-			"确认添加规则",
-			`目录: ${dir}\n描述: ${description}\n关键词: ${kwDisplay}\n位置: ${scopeDisplay}\n配置: ${settingsPath}`,
-		);
-		if (!confirmed) {
-			ctx.ui.notify("[auto-add-dir] 已取消", "info");
-			return;
-		}
-
-		// 6. 写入 settings.json
-		const rule: Rule = { dir, description };
-		if (keywords.length > 0) rule.keywords = keywords;
-
-		const ok = saveRuleToSettings(settingsPath, rule);
-		if (!ok) {
-			ctx.ui.notify("[auto-add-dir] ❌ 写入配置失败，请检查日志", "error");
-			return;
-		}
-
-		// 7. 热更新当前 session 的配置
-		config = loadConfig(ctx.cwd);
-
-		// 预览：新规则是否在当前 cwd 下能解析到真实路径
-		const newRule = config.rules.find((r) => r.dirSource === dir);
-		const resolvedInfo = newRule
-			? `→ ${newRule.dir}`
-			: "(环境变量可能未设置，将在设置后生效)";
-
-		ctx.ui.notify(
-			`[auto-add-dir] ✅ 规则已添加并立即生效\n` +
-				`   共 ${config.rules.length} 条规则\n` +
-				`   ${dir} ${resolvedInfo}`,
-			"info",
-		);
-	}
-
-	/**
-	 * 列出所有规则，选择后可直接编辑（JSON editor，支持 prefill）
-	 */
-	async function cmdList(ctx: ExtensionCommandContext) {
-		if (config.rules.length === 0) {
-			ctx.ui.notify("[auto-add-dir] 当前没有任何规则", "info");
-			return;
-		}
-
-		// 构建规则列表
-		const options = config.rules.map((r, i) => {
-			const exists = fs.existsSync(r.dir) ? "✅" : "❌";
-			const originIcon = r.origin === "project" ? "📁" : "🌐";
-			const kw = r.keywords.length ? r.keywords.join(",") : "无条件";
-			return `[${i + 1}] ${originIcon} ${exists} ${r.description} — ${kw}`;
-		});
-		options.push("← 返回");
-
-		const selected = await ctx.ui.select(
-			`auto-add-dir（${config.rules.length} 条规则）— 选择要编辑的规则`,
-			options,
-		);
-		if (!selected || selected.startsWith("←")) return;
-
-		// 提取序号
-		const m = selected.match(/^\[(\d+)\]/);
-		const idx = m ? parseInt(m[1], 10) - 1 : -1;
-		if (idx < 0 || idx >= config.rules.length) return;
-
-		const rule = config.rules[idx];
-		const originFull = rule.origin === "project" ? "📁 项目配置" : "🌐 全局配置";
-
-		// 用 editor 直接编辑 JSON（prefill 当前值，用户看得见、改得准）
-		const jsonStr = JSON.stringify(
-			{
-				dir: rule.dirSource,
-				description: rule.description,
-				...(rule.keywords.length > 0 ? { keywords: rule.keywords } : {}),
-			},
-			null,
-			"\t",
-		);
-		const edited = await ctx.ui.editor(
-			`编辑规则 — ${originFull}`,
-			jsonStr,
-		);
-
-		// 用户取消或未改动
-		if (edited === undefined || edited.trim() === jsonStr.trim()) return;
-
-		// 解析 JSON
-		let parsed: { dir?: string; description?: string; keywords?: string[] };
-		try {
-			parsed = JSON.parse(edited);
-		} catch (e) {
-			ctx.ui.notify(`[auto-add-dir] ❌ JSON 格式错误: ${e}`, "error");
-			return;
-		}
-		if (!parsed.dir || !parsed.description) {
-			ctx.ui.notify("[auto-add-dir] ❌ 缺少必填字段 dir 或 description", "error");
-			return;
-		}
-
-		// 构建 Rule
-		const newRule: Rule = { dir: parsed.dir, description: parsed.description };
-		if (Array.isArray(parsed.keywords) && parsed.keywords.length > 0) {
-			newRule.keywords = parsed.keywords;
-		}
-
-		// 保存到对应配置
-		const settingsPath = rule.origin === "project"
-			? path.join(ctx.cwd, ".pi", "settings.json")
-			: SETTINGS_PATH;
-
-		// dir 变了 → 先删旧规则
-		if (parsed.dir !== rule.dirSource) {
-			removeRuleFromSettings(settingsPath, rule.dirSource);
-		}
-
-		const ok = saveRuleToSettings(settingsPath, newRule);
-		if (!ok) {
-			ctx.ui.notify("[auto-add-dir] ❌ 写入失败", "error");
-			return;
-		}
-
-		// 热更新
-		config = loadConfig(ctx.cwd);
-		ctx.ui.notify(
-			`[auto-add-dir] ✅ 规则已更新（共 ${config.rules.length} 条）`,
-			"info",
-		);
-	}
-
-	/**
-	 * 交互式删除规则
-	 */
-	async function cmdRemove(ctx: ExtensionCommandContext) {
-		if (config.rules.length === 0) {
-			ctx.ui.notify("[auto-add-dir] 当前没有任何规则", "info");
-			return;
-		}
-
-		// 构建选项列表（标注来源）
-		const options = config.rules.map(
-			(r, i) =>
-				`[${i + 1}] ${r.origin === "project" ? "📁" : "🌐"} ${r.description} — ${r.dirSource}`,
-		);
-
-		const selected = await ctx.ui.select("选择要删除的规则", options);
-		if (!selected) {
-			ctx.ui.notify("[auto-add-dir] 已取消", "info");
-			return;
-		}
-
-		// 提取序号
-		const match = selected.match(/^\[(\d+)\]/);
-		const idx = match ? parseInt(match[1], 10) - 1 : -1;
-		if (idx < 0 || idx >= config.rules.length) {
-			ctx.ui.notify("[auto-add-dir] 无效选择", "warning");
-			return;
-		}
-
-		const rule = config.rules[idx];
-		const originLabel = rule.origin === "project" ? "📁 项目配置" : "🌐 全局配置";
-		const confirmed = await ctx.ui.confirm(
-			"确认删除",
-			`${rule.description}\n${rule.dirSource}\n来源: ${originLabel}`,
-		);
-		if (!confirmed) {
-			ctx.ui.notify("[auto-add-dir] 已取消", "info");
-			return;
-		}
-
-		// 根据来源从对应配置中精确删除
-		const settingsPath = rule.origin === "project"
-			? path.join(ctx.cwd, ".pi", "settings.json")
-			: SETTINGS_PATH;
-
-		const ok = removeRuleFromSettings(settingsPath, rule.dirSource);
-
-		if (ok) {
-			// 热更新
-			config = loadConfig(ctx.cwd);
-			// 清除已发现目录中对应的条目
-			discoveredDirs.delete(rule.dir);
+			// 默认: list（只读显示）
+			if (config.rules.length === 0) {
+				ctx.ui.notify("[auto-add-dir] 当前没有任何规则。告诉 AI「加个规则」即可添加。", "info");
+				return;
+			}
+			const lines = config.rules.map((r, i) => {
+				const kw = r.keywords.length ? r.keywords.join(", ") : "(无条件)";
+				const exists = fs.existsSync(r.dir) ? "✅" : "❌";
+				const origin = r.origin === "project" ? "📁项目" : "🌐全局";
+				return `[${i + 1}] ${origin} ${exists} ${r.description}\n    dir: ${r.dirSource}\n    keywords: ${kw}`;
+			});
 			ctx.ui.notify(
-				`[auto-add-dir] ✅ 已从${originLabel}删除\n   剩余 ${config.rules.length} 条规则`,
+				`[auto-add-dir] ${config.rules.length} 条规则:\n\n${lines.join("\n\n")}\n\n💡 增删改规则：直接告诉 AI，如「加个规则」「删掉规则 1」`,
 				"info",
 			);
-		} else {
-			ctx.ui.notify("[auto-add-dir] ❌ 删除失败，规则可能不在配置文件中", "error");
-		}
-	}
-
-	/**
-	 * 重新加载配置
-	 */
-	function cmdReload(ctx: ExtensionCommandContext) {
-		config = loadConfig(ctx.cwd);
-		discoveredDirs.clear();
-		hasInjectedBefore = false;
-
-		// 重新检查无条件规则
-		const unconditionalRules = config.rules.filter(
-			(r) => r.keywords.length === 0,
-		);
-		for (const rule of unconditionalRules) {
-			if (!discoveredDirs.has(rule.dir) && fs.existsSync(rule.dir)) {
-				const contextFiles = readAllContextFiles(rule.dir);
-				discoveredDirs.set(rule.dir, { rule, contextFiles });
-			}
-		}
-
-		ctx.ui.notify(
-			`[auto-add-dir] 🔄 已重新加载（${config.rules.length} 条规则，${unconditionalRules.length} 条无条件）`,
-			"info",
-		);
-	}
+		},
+	});
 }
