@@ -116,13 +116,29 @@ A collection of [Pi coding agent](https://github.com/earendil-works/pi-coding-ag
 
 - 🔍 **关键词匹配** — 不区分大小写，一条规则可配多个关键词
 - ⚡ **无条件规则** — `keywords` 设为空数组 `[]` 时，session 启动即自动触发，无需等待用户输入
+- 🖥️ **Slash 命令管理** — 通过 `/auto-add-dir` 命令交互式添加/列出/删除规则，无需手改配置文件
 - 🧠 **智能注入** — 第一轮通过 system prompt 指令，后续轮次追加用户消息提醒
 - 🛡️ **保底机制** — 自动读取目录下的 `AGENTS.md` / `CLAUDE.md` 作为后备上下文
 - 🔁 **去重** — 同一 session 中每个目录只触发一次
 - 🌍 **变量替换** — `dir` 支持 `${VAR}` 占位符，从 `env.json` 或系统环境变量解析
 - 📝 **调试日志** — 写入 `%TEMP%/auto-add-dir.log`，排查配置问题
 
-**配置** (`~/.pi/agent/settings.json` → `"autoAddDir"` 字段)：
+**通过 Slash 命令管理（推荐）**：
+
+在 Pi 中直接输入 `/auto-add-dir` 即可弹出交互式菜单，无需手动编辑配置文件：
+
+```
+/auto-add-dir            → 弹出菜单（添加 / 列出 / 删除 / 重载）
+/auto-add-dir add        → 直接进入添加流程
+/auto-add-dir list       → 列出所有规则
+/auto-add-dir remove     → 选择规则删除
+/auto-add-dir reload     → 重新加载配置
+```
+
+添加规则时交互式填写目录路径（支持 `${ENV_VAR}`）、描述、关键词（逗号分隔），
+并可选择保存到全局配置或当前项目配置。添加后立即生效，无需重启 session。
+
+**手动配置** (`~/.pi/agent/settings.json` → `"autoAddDir"` 字段)：
 
 ```json
 {
