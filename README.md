@@ -144,8 +144,22 @@ if (provider === "your-provider") {
 - 🏷️ **标签过滤** — 全局文件可标记标签，项目按需声明加载哪些标签
 - 🔄 **去重** — 同一路径只加载一次，项目配置优先级高于全局
 - 🏠 **路径灵活** — 支持相对路径、绝对路径、`~` 展开
+- 🖥️ **交互式命令** — 通过 `/extra-files` 命令交互式管理（添加/编辑/删除/includes/重载），无需手改配置文件
 
-**配置格式**（全局 `~/.pi/agent/settings.json` 和项目 `.pi/settings.json` 通用）：
+**通过 /extra-files 命令管理（推荐）**：
+
+```
+/extra-files            → 主菜单（添加 / 列出编辑 / includes / 重载 / 查看）
+/extra-files add        → 添加文件（路径 + 标签 + 选择全局/项目）
+/extra-files list       → 列出并编辑/删除（显示 ✅已加载 / ⏸️被 includes 过滤）
+/extra-files includes   → 管理项目 includes 标签（设置 / 全选 / 清空）
+/extra-files reload     → 重新加载配置
+/extra-files show       → 查看当前已加载文件
+```
+
+添加文件时交互式填写路径、标签（逗号分隔，留空=无条件加载）、选择全局或项目；列出时可编辑路径/标签、删除单条；includes 管理自动扫描全局可用标签，支持全选或清空。所有改动即时热重载。
+
+**配置格式**（手动编辑；全局 `~/.pi/agent/settings.json` 和项目 `.pi/settings.json` 通用）：
 
 ```json
 {
