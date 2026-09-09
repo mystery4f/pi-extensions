@@ -34,6 +34,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { Text } from "@earendil-works/pi-tui";
 import type {
 	ExtensionAPI,
 	ExtensionCommandContext,
@@ -351,10 +352,17 @@ export default function autoAddDirExtension(pi: ExtensionAPI) {
 	/** 已发现但提醒尚未随用户消息投递的目录 */
 	const pendingReminder = new Set<string>();
 
-	/** 登记一个已发现目录；返回 false 表示已登记过或目录不存在 */
+	/** 会话工作目录，session_start 时记录；用于跳过「cwd 即目标目录」的误提醒 */
+	let sessionCwd = "";
+
+	/** 登记一个已发现目录；返回 false 表示已登记过、目录不存在或即当前 cwd */
 	function discoverRule(rule: ResolvedRule): boolean {
 		if (discoveredDirs.has(rule.dir) || !fs.existsSync(rule.dir)) return false;
-		discoveredDirs.set(rule.dir, rule);
+		// cwd 已由 pi 原生加载上下文，add_directory 纯多余 → 跳过
+		if (sessionCwd && path.resolve(rule.dir).toLowerCase() === path.resolve(sessionCwd).toLowerCase()) {
+			log(`discover: skip "${rule.dir}" — already the session cwd`);
+			return false;
+		}
 		pendingReminder.add(rule.dir);
 		log(`discover: "${rule.description}" → ${rule.dir}`);
 		return true;
@@ -370,6 +378,7 @@ export default function autoAddDirExtension(pi: ExtensionAPI) {
 	pi.on("session_start", async (_event, ctx) => {
 		discoveredDirs.clear();
 		pendingReminder.clear();
+		sessionCwd = ctx.cwd;
 		config = loadConfig(ctx.cwd);
 		discoverUnconditional();
 
@@ -405,6 +414,16 @@ export default function autoAddDirExtension(pi: ExtensionAPI) {
 			{ deliverAs: "nextTurn" },
 		);
 		return { action: "continue" };
+	});
+
+	// 提醒消息渲染器：跳过默认 [customType] 标签 + 底色盒子，对齐 llm-wiki notices 单行样式
+	pi.registerMessageRenderer("auto-add-dir-reminder", (message, _options, theme) => {
+		const content = typeof message.content === "string" ? message.content : "";
+		const plain = content.replace(/`/g, "");
+		const m = plain.match(/^\*\*(.+?):\*\*\s*([\s\S]*)$/);
+		const label = m ? m[1] : "auto-add-dir";
+		const body = m ? m[2] : plain;
+		return new Text(theme.fg("accent", `📂 ${label}`) + " " + theme.fg("dim", body), 0, 0);
 	});
 
 	// ═══════════════════════════════════════════════════════════
