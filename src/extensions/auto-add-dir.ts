@@ -1,18 +1,20 @@
 /**
  * Auto Add Directory Extension
  *
- * 当用户提及特定关键词时，自动将对应目录加入会话。
+ * 当用户提及特定关键词时，提醒 LLM 将对应目录加入会话。
  *
- * 工作原理：
- *   1. input 事件：匹配关键词 → 记录匹配的目录
- *      - 第一轮匹配：只记录，不 transform（靠 system prompt 注入）
- *      - 中间轮次匹配：记录 + transform 用户消息追加提醒（LLM 遵循率更高）
- *   2. before_agent_start 事件：
- *      a) 在 system prompt 中注入「强制调用 add_directory」指令
- *      b) 同时注入 CLAUDE.md / AGENTS.md 内容作为保底（即使 LLM 不调工具也能用）
+ * 机制（单一通道，sendMessage nextTurn 投递，样式对齐 @zosmaai/pi-llm-wiki notices）:
+ *   1. session_start：无条件规则（keywords 为空）直接进入待提醒队列
+ *   2. input：关键词命中新目录，或待提醒队列非空
+ *      → sendMessage 发送一条提醒（display:true，nextTurn），要求 LLM 先调用 add_directory
+ *   3. 不注入系统提示词，不预读 AGENTS.md/CLAUDE.md
+ *      （add_directory 由 pi 原生加载目录上下文，无需保底副本）
  *
- * 缓存策略：
- *   同一 session 中同一目录只触发一次（discoveredDirs 去重）
+ * 分层：
+ *   Layer 1 配置 — 规则解析/存储（${VAR} 占位符、basePath、全局+项目合并）
+ *   Layer 2 发现 — 关键词匹配 + 待提醒队列
+ *   Layer 3 事件 — session_start / input 接线
+ *   Layer 4 命令 — /auto-add-dir 交互式管理
  *
  * ── 配置方式 ──
  *
@@ -27,7 +29,7 @@
  *   项目: .pi/settings.json → "autoAddDir" 字段（与全局合并，同 dir 时项目优先）
  *
  * 环境变量: ~/.pi/agent/env.json
- * 无条件规则: keywords 省略或设为空数组 [] 时，在 session_start 即自动触发
+ * 无条件规则: keywords 省略或设为空数组 [] 时，session_start 即自动触发
  */
 
 import * as fs from "node:fs";
@@ -67,7 +69,11 @@ const AGENT_DIR = path.join(
 );
 const SETTINGS_PATH = path.join(AGENT_DIR, "settings.json");
 
-// ── 类型 ───────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════
+// Layer 1 配置 — 类型 / 环境变量 / 读取 / 写入
+// ═══════════════════════════════════════════════════════════════
+
+// ── 类型 ──
 
 interface Rule {
 	keywords?: string[];
@@ -90,12 +96,7 @@ interface ResolvedRule {
 	origin: RuleOrigin;
 }
 
-interface DirContext {
-	rule: ResolvedRule;
-	contextFiles: { filename: string; content: string }[];
-}
-
-// ── 环境变量解析 ────────────────────────────────────────────────
+// ── 环境变量解析 ──
 
 const ENV_JSON_PATH = path.join(AGENT_DIR, "env.json");
 
@@ -152,7 +153,7 @@ function resolveDir(
 	return null;
 }
 
-// ── Config 加载（读取） ────────────────────────────────────────
+// ── Config 读取 ──
 
 interface ResolvedConfig {
 	rules: ResolvedRule[];
@@ -238,7 +239,7 @@ function loadConfig(cwd?: string): ResolvedConfig {
 	return { rules };
 }
 
-// ── Config 写入 ────────────────────────────────────────────────
+// ── Config 写入 ──
 
 function saveRuleToSettings(settingsPath: string, rule: Rule): boolean {
 	let settings: Record<string, any> = {};
@@ -316,23 +317,9 @@ function removeRuleFromSettings(settingsPath: string, dirSource: string): boolea
 	}
 }
 
-// ── 辅助函数 ───────────────────────────────────────────────────
-
-function readAllContextFiles(
-	dir: string,
-): { filename: string; content: string }[] {
-	const files: { filename: string; content: string }[] = [];
-	for (const name of ["AGENTS.md", "CLAUDE.md"]) {
-		const fp = path.join(dir, name);
-		if (fs.existsSync(fp)) {
-			try {
-				const content = fs.readFileSync(fp, "utf-8").trim();
-				if (content) files.push({ filename: name, content });
-			} catch {}
-		}
-	}
-	return files;
-}
+// ═══════════════════════════════════════════════════════════════
+// Layer 2 发现 — 关键词匹配 + 待提醒队列
+// ═══════════════════════════════════════════════════════════════
 
 function matchRule(text: string, rule: ResolvedRule): boolean {
 	if (rule.keywords.length === 0) return true;
@@ -340,33 +327,55 @@ function matchRule(text: string, rule: ResolvedRule): boolean {
 	return rule.keywords.some((kw) => lower.includes(kw.toLowerCase()));
 }
 
-// ── 主扩展 ─────────────────────────────────────────────────────
+function buildReminder(dirs: ResolvedRule[]): string {
+	const list = dirs
+		.map((r) => `\`${r.dir}\` — ${r.description}`)
+		.join("; ");
+	return (
+		`**auto-add-dir reminder:** Discovered ${dirs.length} new director${dirs.length > 1 ? "ies" : "y"}` +
+		` (${list}). Before answering, you MUST call \`add_directory\` for each of them — ` +
+		"this loads skills, search capabilities, and context files that you need. " +
+		"Do not skip this step."
+	);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Layer 3 事件 — session_start / input 接线
+// ═══════════════════════════════════════════════════════════════
 
 export default function autoAddDirExtension(pi: ExtensionAPI) {
 	log(`=== extension loading === EXT_DIR=${EXT_DIR}`);
 	let config = loadConfig();
-	const discoveredDirs = new Map<string, DirContext>();
-	let hasInjectedBefore = false;
+	/** 已发现目录（dir → rule），本 session 内每目录只提醒一次 */
+	const discoveredDirs = new Map<string, ResolvedRule>();
+	/** 已发现但提醒尚未随用户消息投递的目录 */
+	const pendingReminder = new Set<string>();
 
-	// ── 事件监听 ───────────────────────────────────────────────
+	/** 登记一个已发现目录；返回 false 表示已登记过或目录不存在 */
+	function discoverRule(rule: ResolvedRule): boolean {
+		if (discoveredDirs.has(rule.dir) || !fs.existsSync(rule.dir)) return false;
+		discoveredDirs.set(rule.dir, rule);
+		pendingReminder.add(rule.dir);
+		log(`discover: "${rule.description}" → ${rule.dir}`);
+		return true;
+	}
+
+	/** 无条件规则（keywords 为空）session_start 即发现 */
+	function discoverUnconditional() {
+		for (const rule of config.rules) {
+			if (rule.keywords.length === 0) discoverRule(rule);
+		}
+	}
 
 	pi.on("session_start", async (_event, ctx) => {
 		discoveredDirs.clear();
-		hasInjectedBefore = false;
+		pendingReminder.clear();
 		config = loadConfig(ctx.cwd);
+		discoverUnconditional();
 
-		const unconditionalRules = config.rules.filter(r => r.keywords.length === 0);
-		for (const rule of unconditionalRules) {
-			if (!discoveredDirs.has(rule.dir) && fs.existsSync(rule.dir)) {
-				const contextFiles = readAllContextFiles(rule.dir);
-				discoveredDirs.set(rule.dir, { rule, contextFiles });
-				log(`session_start: unconditional "${rule.description}" → ${rule.dir}`);
-			}
-		}
-
-		const kwCount = config.rules.length - unconditionalRules.length;
+		const uncond = config.rules.filter((r) => r.keywords.length === 0).length;
 		ctx.ui.notify(
-			`[auto-add-dir] ${config.rules.length} rule(s) (${unconditionalRules.length} unconditional, ${kwCount} keyword)`,
+			`[auto-add-dir] ${config.rules.length} rule(s) (${uncond} unconditional, ${config.rules.length - uncond} keyword)`,
 			"info",
 		);
 	});
@@ -376,78 +385,30 @@ export default function autoAddDirExtension(pi: ExtensionAPI) {
 
 		log(`input: "${event.text.slice(0, 80)}"`);
 
-		const newDirsThisTurn: DirContext[] = [];
-
 		for (const rule of config.rules) {
-			if (matchRule(event.text, rule) && !discoveredDirs.has(rule.dir)) {
-				log(`input: matched "${rule.description}" → ${rule.dir}`);
-				if (fs.existsSync(rule.dir)) {
-					const contextFiles = readAllContextFiles(rule.dir);
-					const dirCtx: DirContext = { rule, contextFiles };
-					discoveredDirs.set(rule.dir, dirCtx);
-					newDirsThisTurn.push(dirCtx);
-					log(`input: loaded [${contextFiles.map((f) => f.filename).join(",")}]`);
-				} else {
-					log(`input: dir not found ${rule.dir}`);
-				}
-			}
+			if (matchRule(event.text, rule)) discoverRule(rule);
 		}
 
-		if (newDirsThisTurn.length > 0 && hasInjectedBefore) {
-			let reminder =
-				"\n\n---\n" +
-				"⚠️ **[auto-add-dir 检测到新目录]** 请在回答前先调用 `add_directory`：\n";
-			for (const { rule } of newDirsThisTurn) {
-				reminder += `- \`add_directory\` with path \`${rule.dir}\` — ${rule.description}\n`;
-			}
-			log(`input: appending user message reminder (${newDirsThisTurn.length} new dir(s))`);
-			return { action: "continue", text: event.text + reminder };
-		}
+		if (pendingReminder.size === 0) return { action: "continue" };
 
+		const dirs = [...pendingReminder]
+			.map((dir) => discoveredDirs.get(dir))
+			.filter((r): r is ResolvedRule => !!r);
+		pendingReminder.clear();
+		log(`input: reminder for ${dirs.length} dir(s) via sendMessage(nextTurn)`);
+		pi.sendMessage(
+			{
+				customType: "auto-add-dir-reminder",
+				content: buildReminder(dirs),
+				display: true,
+			},
+			{ deliverAs: "nextTurn" },
+		);
 		return { action: "continue" };
 	});
 
-	pi.on("before_agent_start", async (event) => {
-		if (discoveredDirs.size === 0) return;
-
-		hasInjectedBefore = true;
-		log(`before_agent_start: injecting ${discoveredDirs.size} dir(s)`);
-
-		let sp = event.systemPrompt;
-
-		sp =
-			`\n## MANDATORY: Call add_directory First\n` +
-			`Before answering the user's question, you MUST call the \`add_directory\` tool for each of these directories. ` +
-			`This loads skills, search capabilities, and context files that you need.\n\n` +
-			`Directories to add:\n`;
-
-		for (const [, { rule }] of discoveredDirs) {
-			sp += `- \`add_directory\` with path \`${rule.dir}\` — ${rule.description}\n`;
-		}
-
-		sp += `\nDo NOT skip this step. Call add_directory NOW, then proceed.\n\n`;
-
-		sp += `---\n## Auto-Loaded Directory Context (Backup)\n`;
-		sp +=
-			"The following context files were pre-loaded. " +
-			"Use `search_external_files` to find files, `read`/`edit`/`write` with absolute paths.\n\n";
-
-		for (const [, { rule, contextFiles }] of discoveredDirs) {
-			sp += `### ${rule.description}\nDirectory: \`${rule.dir}\`\n\n`;
-			if (contextFiles.length > 0) {
-				for (const cf of contextFiles) {
-					sp += `#### ${cf.filename}\n\`\`\`markdown\n${cf.content}\n\`\`\`\n\n`;
-				}
-			} else {
-				sp += `_(No AGENTS.md or CLAUDE.md found)_\n\n`;
-			}
-		}
-
-		log(`before_agent_start: injection length=${sp.length}`);
-		return { systemPrompt: event.systemPrompt + sp };
-	});
-
-	// ── /auto-add-dir 交互式命令 ─────────────────────────────
+	// ═══════════════════════════════════════════════════════════
+	// Layer 4 命令 — /auto-add-dir 交互式管理
 	//
 	// 用法：
 	//   /auto-add-dir          → 主菜单
@@ -456,6 +417,7 @@ export default function autoAddDirExtension(pi: ExtensionAPI) {
 	//   /auto-add-dir reload   → 重载
 	//
 	// 设计原则：最小化交互步骤，编辑/添加无需 confirm，直接保存。
+	// ═══════════════════════════════════════════════════════════
 
 	pi.registerCommand("auto-add-dir", {
 		description: "管理 auto-add-dir 规则（交互式添加/编辑/删除）",
@@ -592,6 +554,7 @@ export default function autoAddDirExtension(pi: ExtensionAPI) {
 					? path.join(ctx.cwd, ".pi", "settings.json") : SETTINGS_PATH;
 				removeRuleFromSettings(sp, rule.dirSource);
 				discoveredDirs.delete(rule.dir);
+				pendingReminder.delete(rule.dir);
 				config = loadConfig(ctx.cwd);
 				ctx.ui.notify(`[auto-add-dir] ✅ 已删除（剩余 ${config.rules.length} 条）`, "info");
 				return;
@@ -650,16 +613,11 @@ export default function autoAddDirExtension(pi: ExtensionAPI) {
 	function cmdReload(ctx: ExtensionCommandContext) {
 		config = loadConfig(ctx.cwd);
 		discoveredDirs.clear();
-		hasInjectedBefore = false;
-		const unconditionalRules = config.rules.filter((r) => r.keywords.length === 0);
-		for (const rule of unconditionalRules) {
-			if (!discoveredDirs.has(rule.dir) && fs.existsSync(rule.dir)) {
-				const contextFiles = readAllContextFiles(rule.dir);
-				discoveredDirs.set(rule.dir, { rule, contextFiles });
-			}
-		}
+		pendingReminder.clear();
+		discoverUnconditional();
+		const uncond = config.rules.filter((r) => r.keywords.length === 0).length;
 		ctx.ui.notify(
-			`[auto-add-dir] 🔄 已重载（${config.rules.length} 条规则，${unconditionalRules.length} 条无条件）`,
+			`[auto-add-dir] 🔄 已重载（${config.rules.length} 条规则，${uncond} 条无条件）`,
 			"info",
 		);
 	}
