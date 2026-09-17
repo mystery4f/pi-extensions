@@ -363,6 +363,7 @@ export default function autoAddDirExtension(pi: ExtensionAPI) {
 			log(`discover: skip "${rule.dir}" — already the session cwd`);
 			return false;
 		}
+		discoveredDirs.set(rule.dir, rule);
 		pendingReminder.add(rule.dir);
 		log(`discover: "${rule.description}" → ${rule.dir}`);
 		return true;
