@@ -323,6 +323,8 @@ if (provider === "your-provider") {
 - 🎯 **按 provider/model 开关** — glob 匹配（如 `xiaomi`、`*mimo*`），只对你指定的模型生效，默认关闭不影响其他扩展用户
 - ⚡ **在线检测** — 逐 token 增量触发，循环形成后尽快止损，不等整个段落生成完
 - 🔕 **可降级为仅警告** — `action: "warn"` 时不中止，只提示
+- 🔄 **自动升级恢复** — `action: "retry"` 命中后中止并自动重来，第 1 次提醒换思路，第 2 次要求推倒重来，超过 `maxRetries` 次退回纯中止；收到真实用户消息后计数复位
+- 🛠️ **doom loop 检测** — 同一条回复里连续 `toolRepeatCount`（默认 3）次同名同参工具调用触发干预（与复读层共用同一套升级逻辑）
 - 🧩 **配置分层** — 全局 `~/.pi/agent/settings.json` → 项目 `.pi/settings.json`（覆盖）→ 环境变量（最高）
 
 **配置**（`~/.pi/agent/settings.json` 或项目 `.pi/settings.json`）：
@@ -334,6 +336,8 @@ if (provider === "your-provider") {
     "providers": ["mimo-plan", "xiaomi", "xiaomi-token-plan-*"],
     "models": ["*mimo*"],
     "action": "abort",
+    "maxRetries": 2,
+    "toolRepeatCount": 3,
     "windowTokens": 500,
     "minPeriod": 4,
     "threshold": 20,
@@ -347,13 +351,15 @@ if (provider === "your-provider") {
 | `enabled` | `boolean` | `false` | 总开关。默认关闭，显式配置才生效 |
 | `providers` | `string[]` | `[]` | provider glob 列表，命中即开启检测。空 = 不按 provider 匹配 |
 | `models` | `string[]` | `[]` | model id glob 列表，命中即开启检测。空 = 不按 model 匹配 |
-| `action` | `"abort" \| "warn"` | `"abort"` | `abort` 警告并中止 run；`warn` 仅警告 |
+| `action` | `"abort" \| "warn" \| "retry"` | `"abort"` | `abort` 警告并中止 run；`warn` 仅警告；`retry` 中止后自动重来并升级提醒（remind → replan → 超限退回纯中止），收到真实用户消息时计数复位 |
+| `maxRetries` | `number` | `2` | `action: "retry"` 时最多自动重试次数，超限退回纯中止 |
+| `toolRepeatCount` | `number` | `3` | doom loop 阈值：同一条回复里同名同参工具调用连续出现该次数即干预 |
 | `windowTokens` | `number` | `500` | 滑动窗口 token 数 |
 | `minPeriod` | `number` | `4` | 最短循环周期（token 数），块小于该值不判循环 |
 | `threshold` | `number` | `20` | 同一块连续重复次数阈值 |
 | `distinctMin` | `number` | `3` | 循环块内最少不同 token 数，防退化误报 |
 
-**环境变量覆盖**（优先级最高）：`THINKING_LOOP_GUARD_ENABLED`、`THINKING_LOOP_GUARD_PROVIDERS`（逗号分隔）、`THINKING_LOOP_GUARD_MODELS`（逗号分隔）、`THINKING_LOOP_GUARD_ACTION`、`THINKING_LOOP_GUARD_WINDOW`、`THINKING_LOOP_GUARD_MIN_PERIOD`、`THINKING_LOOP_GUARD_THRESHOLD`、`THINKING_LOOP_GUARD_DISTINCT_MIN`。
+**环境变量覆盖**（优先级最高）：`THINKING_LOOP_GUARD_ENABLED`、`THINKING_LOOP_GUARD_PROVIDERS`（逗号分隔）、`THINKING_LOOP_GUARD_MODELS`（逗号分隔）、`THINKING_LOOP_GUARD_ACTION`（`abort`/`warn`/`retry`）、`THINKING_LOOP_GUARD_MAX_RETRIES`、`THINKING_LOOP_GUARD_TOOL_REPEAT_COUNT`、`THINKING_LOOP_GUARD_WINDOW`、`THINKING_LOOP_GUARD_MIN_PERIOD`、`THINKING_LOOP_GUARD_THRESHOLD`、`THINKING_LOOP_GUARD_DISTINCT_MIN`。
 
 **注意**：pi 没有"截断思考段但继续生成答案"的 API，中止是整个 run 级别的——已流出的内容保留在会话历史中，可手动追加提示词让模型换思路继续。
 

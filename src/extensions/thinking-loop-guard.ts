@@ -19,7 +19,9 @@
  *     "enabled": true,                 // master switch, default false
  *     "providers": ["xiaomi"],         // provider glob list, hit = on
  *     "models": ["*mimo*"],            // model id glob list, hit = on
- *     "action": "abort",               // "abort" (default) | "warn"
+ *     "action": "abort",               // "abort" (default) | "warn" | "retry"
+ *     "maxRetries": 2,                 // retry escalation budget (action=retry)
+ *     "toolRepeatCount": 3,            // same-args tool-call doom-loop threshold
  *     "windowTokens": 500,
  *     "minPeriod": 4,
  *     "threshold": 20,
@@ -27,8 +29,15 @@
  *   }
  * Env: THINKING_LOOP_GUARD_ENABLED, THINKING_LOOP_GUARD_PROVIDERS (comma),
  *      THINKING_LOOP_GUARD_MODELS (comma), THINKING_LOOP_GUARD_ACTION,
+ *      THINKING_LOOP_GUARD_MAX_RETRIES, THINKING_LOOP_GUARD_TOOL_REPEAT_COUNT,
  *      THINKING_LOOP_GUARD_WINDOW, THINKING_LOOP_GUARD_MIN_PERIOD,
  *      THINKING_LOOP_GUARD_THRESHOLD, THINKING_LOOP_GUARD_DISTINCT_MIN
+ *
+ * action: "retry" aborts the run then re-prompts the model with an escalating
+ * reminder (attempt 1: suggest a different approach; attempt 2: demand a full
+ * replan). The counter resets when a real user message arrives. After
+ * maxRetries the run aborts without re-prompting. Each re-prompt text starts
+ * with a synthetic-user prefix so the retry handler never loops on itself.
  */
 
 import fs from "node:fs";
@@ -42,7 +51,9 @@ interface GuardConfig {
 	enabled: boolean;
 	providers: string[];
 	models: string[];
-	action: "abort" | "warn";
+	action: "abort" | "warn" | "retry";
+	maxRetries: number;
+	toolRepeatCount: number;
 	windowTokens: number;
 	minPeriod: number;
 	threshold: number;
@@ -54,6 +65,8 @@ const DEFAULT_CONFIG: GuardConfig = {
 	providers: [],
 	models: [],
 	action: "abort",
+	maxRetries: 2,
+	toolRepeatCount: 3,
 	windowTokens: 500,
 	minPeriod: 4,
 	threshold: 20,
@@ -97,7 +110,10 @@ function loadConfig(cwd: string): GuardConfig {
 	if (typeof block?.enabled === "boolean") cfg.enabled = block.enabled;
 	cfg.providers = strList(block?.providers) ?? DEFAULT_CONFIG.providers;
 	cfg.models = strList(block?.models) ?? DEFAULT_CONFIG.models;
-	if (block?.action === "abort" || block?.action === "warn") cfg.action = block.action;
+	if (block?.action === "abort" || block?.action === "warn" || block?.action === "retry")
+		cfg.action = block.action;
+	cfg.maxRetries = num(block?.maxRetries, DEFAULT_CONFIG.maxRetries);
+	cfg.toolRepeatCount = num(block?.toolRepeatCount, DEFAULT_CONFIG.toolRepeatCount);
 	cfg.windowTokens = num(block?.windowTokens, DEFAULT_CONFIG.windowTokens);
 	cfg.minPeriod = num(block?.minPeriod, DEFAULT_CONFIG.minPeriod);
 	cfg.threshold = num(block?.threshold, DEFAULT_CONFIG.threshold);
@@ -114,8 +130,10 @@ function loadConfig(cwd: string): GuardConfig {
 		.map((s) => s.trim())
 		.filter(Boolean);
 	if (envModels?.length) cfg.models = envModels;
-	if (process.env.THINKING_LOOP_GUARD_ACTION === "abort" || process.env.THINKING_LOOP_GUARD_ACTION === "warn")
+	if (process.env.THINKING_LOOP_GUARD_ACTION === "abort" || process.env.THINKING_LOOP_GUARD_ACTION === "warn" || process.env.THINKING_LOOP_GUARD_ACTION === "retry")
 		cfg.action = process.env.THINKING_LOOP_GUARD_ACTION;
+	cfg.maxRetries = num(process.env.THINKING_LOOP_GUARD_MAX_RETRIES, cfg.maxRetries);
+	cfg.toolRepeatCount = num(process.env.THINKING_LOOP_GUARD_TOOL_REPEAT_COUNT, cfg.toolRepeatCount);
 	cfg.windowTokens = num(process.env.THINKING_LOOP_GUARD_WINDOW, cfg.windowTokens);
 	cfg.minPeriod = num(process.env.THINKING_LOOP_GUARD_MIN_PERIOD, cfg.minPeriod);
 	cfg.threshold = num(process.env.THINKING_LOOP_GUARD_THRESHOLD, cfg.threshold);
@@ -196,6 +214,20 @@ class LoopDetector {
 		return text.length > 80 ? text.slice(0, 80) + "…" : text;
 	}
 }
+// ── Tool-call signature: name + key-sorted args JSON ──────────
+
+/** Stable JSON: object keys sorted, so arg order does not matter. */
+function stableStringify(v: unknown): string {
+	if (v === null || typeof v !== "object") return JSON.stringify(v) ?? String(v);
+	if (Array.isArray(v)) return "[" + v.map(stableStringify).join(",") + "]";
+	const obj = v as Record<string, unknown>;
+	const keys = Object.keys(obj).sort();
+	return "{" + keys.map((k) => `${JSON.stringify(k)}:${stableStringify(obj[k])}`).join(",") + "}";
+}
+
+function toolSig(name: string, args: unknown): string {
+	return `${name}(${stableStringify(args)})`;
+}
 
 // ── Extension ──────────────────────────────────────────────────
 
@@ -209,6 +241,11 @@ export default function thinkingLoopGuard(pi: ExtensionAPI) {
 	// One detector per content stream (thinking / text), keyed by contentIndex.
 	const detectors = new Map<string, LoopDetector>();
 	let fired = false; // one abort per assistant message
+	// Retry escalation state. Reset only on a real user message.
+	let retries = 0;
+	// Doom-loop state: identical same-args tool calls within one assistant message.
+	let lastToolSig = "";
+	let toolRepeat = 0;
 
 	const getDetector = (key: string): LoopDetector => {
 		let d = detectors.get(key);
@@ -219,6 +256,50 @@ export default function thinkingLoopGuard(pi: ExtensionAPI) {
 		return d;
 	};
 
+	// Escalating action for one loop event. detail describes what was detected.
+	const intervene = (ctx: import("@earendil-works/pi-coding-agent").ExtensionContext, detail: string) => {
+		if (cfg.action === "warn") {
+			ctx.ui.notify(`thinking-loop-guard: ${detail} (warning only)`, "warning");
+			return;
+		}
+		if (cfg.action === "abort") {
+			ctx.ui.notify(`thinking-loop-guard: ${detail} — aborting run`, "warning");
+			ctx.abort();
+			return;
+		}
+		// action === "retry": abort, then re-prompt with escalating reminder.
+		if (retries >= cfg.maxRetries) {
+			ctx.ui.notify(
+				`thinking-loop-guard: ${detail} — retry budget exhausted (${retries}/${cfg.maxRetries}), aborting run`,
+				"warning",
+			);
+			ctx.abort();
+			return;
+		}
+		retries += 1;
+		const reminder =
+			retries === 1
+				? `Your last response was cut off by the loop guard: you repeated the same block ${detail}. Stop that line of thinking. Take a different approach, use a different tool, or state plainly what you are stuck on.`
+				: `Your last response hit the loop guard again (${detail}). You MUST completely replan before continuing. Do not reuse the earlier wording or reasoning. If the task is impossible right now, say so and stop.`;
+		ctx.ui.notify(
+			`thinking-loop-guard: ${detail} — aborting and re-prompting (attempt ${retries}/${cfg.maxRetries})`,
+			"warning",
+		);
+		ctx.abort();
+		// Re-prompt AFTER abort so it lands as the next turn. The fixed prefix
+		// marks it synthetic so the retry counter ignores it.
+		pi.sendUserMessage(`[thinking-loop-guard] ${reminder}`, { deliverAs: "followUp" });
+	};
+
+	// Reset escalation when a real user speaks. Skip our own synthetic re-prompts.
+	pi.on("message_start", (event) => {
+		const msg = event.message;
+		if (msg.role !== "user") return;
+		const text = typeof msg.content === "string" ? msg.content : "";
+		if (text.startsWith("[thinking-loop-guard]")) return;
+		retries = 0;
+	});
+
 	pi.on("message_update", (event, ctx) => {
 		const msg = event.message;
 		if (msg.role !== "assistant") return;
@@ -227,6 +308,8 @@ export default function thinkingLoopGuard(pi: ExtensionAPI) {
 		if (ev.type === "start") {
 			detectors.clear();
 			fired = false;
+			lastToolSig = "";
+			toolRepeat = 0;
 			return;
 		}
 
@@ -256,6 +339,24 @@ export default function thinkingLoopGuard(pi: ExtensionAPI) {
 			case "text_end":
 				detectors.delete(`x:${ev.contentIndex}`);
 				break;
+			case "toolcall_end": {
+				if (fired || !shouldGuard(cfg, msg.provider, msg.model)) return;
+				const sig = toolSig(ev.toolCall.name, ev.toolCall.arguments);
+				if (sig === lastToolSig) {
+					toolRepeat += 1;
+				} else {
+					lastToolSig = sig;
+					toolRepeat = 1;
+				}
+				if (toolRepeat >= cfg.toolRepeatCount) {
+					fired = true;
+					intervene(
+						ctx,
+						`doom loop: tool "${ev.toolCall.name}" called ${toolRepeat}× with identical arguments`,
+					);
+				}
+				return;
+			}
 			default:
 				return;
 		}
@@ -269,8 +370,6 @@ export default function thinkingLoopGuard(pi: ExtensionAPI) {
 		fired = true;
 		const detector = getDetector(key);
 		const preview = detector.preview();
-		const msg2 = `thinking-loop-guard: ${phase} loop detected (${msg.provider}/${msg.model}, period=${period}, "${preview}") — ${cfg.action === "abort" ? "aborting run" : "warning only"}`;
-		ctx.ui.notify(msg2, "warning");
-		if (cfg.action === "abort") ctx.abort();
+		intervene(ctx, `repetitive ${phase} loop (period=${period}, "${preview}")`);
 	});
 }
