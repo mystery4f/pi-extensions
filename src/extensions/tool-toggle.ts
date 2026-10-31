@@ -61,6 +61,18 @@ function toolSourceLabel(tool: { name: string; sourceInfo?: { source?: string } 
 	return source ?? "extension";
 }
 
+/** Temporary diagnosis: append one JSON line per lifecycle event (remove after use). */
+function debugLog(message: string): void {
+	try {
+		fs.appendFileSync(
+			path.join(os.homedir(), ".pi", "agent", "tool-toggle-debug.log"),
+			JSON.stringify({ ts: new Date().toISOString(), pid: process.pid, msg: message }) + "\n",
+		);
+	} catch {
+		// diagnostics must never break the extension
+	}
+}
+
 function loadGlobalSelection(): Set<string> | undefined {
 	try {
 		const raw = fs.readFileSync(GLOBAL_FILE, "utf8");
@@ -213,18 +225,29 @@ export default function toolToggle(pi: ExtensionAPI) {
 	};
 
 	pi.on("session_start", async (_event, ctx) => {
+		const activeBefore = pi.getActiveTools();
 		tuiActive = ctx.mode === "tui";
-		if (!tuiActive) return;
+		if (!tuiActive) {
+			debugLog("session_start: skipped, mode=" + ctx.mode);
+			return;
+		}
 		runtimeBaseline ??= [...pi.getActiveTools()];
 		globalSelection = loadGlobalSelection();
 		sessionSelection = undefined;
+		let customFound = false;
 		for (const entry of ctx.sessionManager.getBranch()) {
 			if (entry.type === "custom" && entry.customType === CUSTOM_TYPE) {
 				const data = entry.data as ToolsState | undefined;
 				sessionSelection = new Set(data?.enabledTools ?? []);
+				customFound = true;
 			}
 		}
 		enforce(ctx);
+		debugLog(
+			`session_start: mode=${ctx.mode} branchCustom=${customFound} ` +
+			`sessionSel=${sessionSelection?.size ?? "none"} globalSel=${globalSelection?.size ?? "none"} ` +
+			`activeBefore=${activeBefore.length} activeAfter=${pi.getActiveTools().length}`,
+		);
 	});
 
 	pi.on("session_tree", async (_event, ctx) => {
@@ -240,7 +263,12 @@ export default function toolToggle(pi: ExtensionAPI) {
 	});
 
 	pi.on("model_select", async (_event, ctx) => enforce(ctx));
-	pi.on("before_agent_start", async (_event, ctx) => enforce(ctx));
+	pi.on("before_agent_start", async (_event, ctx) => {
+		enforce(ctx);
+		debugLog(
+			`before_agent_start: mode=${ctx.mode} activeCount=${pi.getActiveTools().length}`,
+		);
+	});
 
 	// Defensive rejection: anything that slipped past the active-list trim.
 	pi.on("tool_call", (event, ctx) => {
