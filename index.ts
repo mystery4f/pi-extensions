@@ -7,6 +7,7 @@ import routerBridge from "./src/extensions/router-bridge.js";
 import batchPatch from "./src/extensions/batch-patch/index.js";
 import whoami from "./src/extensions/whoami.js";
 import codegraphGuidance from "./src/extensions/codegraph-guidance.js";
+import toolToggle from "./src/extensions/tool-toggle.js";
 
 export default function (pi: ExtensionAPI) {
 	// 注册扩展（各自注册事件 handler，但不再各自发 notify）
@@ -15,6 +16,7 @@ export default function (pi: ExtensionAPI) {
 	zhipuProvider(pi);
 	routerBridge(pi);
 	whoami(pi);
+	toolToggle(pi);
 	// batchPatch(pi);
 	// registerPatchTool(pi);
 	// codegraphGuidance(pi);

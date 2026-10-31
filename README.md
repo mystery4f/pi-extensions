@@ -12,6 +12,7 @@ A collection of [Pi coding agent](https://github.com/earendil-works/pi-coding-ag
 | [auto-add-dir](#auto-add-dir) | 检测用户输入中的关键词，自动将对应目录加入会话 |
 | [patch](#patch) | 精确字符串替换文件编辑工具，支持锚点定位和 diff 预览 |
 | [codegraph-guidance](#codegraph-guidance) | 检测 codegraph MCP 工具并注入使用指南到 system prompt |
+| [tool-toggle](#tool-toggle) | `/tools` 交互式启用/禁用工具（会话或全局作用域） |
 
 ---
 
@@ -279,6 +280,31 @@ if (provider === "your-provider") {
   LLM 自动调用 add_directory 加载完整目录
 ```
 
+### tool-toggle
+
+`/tools` 命令打开 TUI 复选框列表，交互式启用/禁用所有可用工具。被禁用的工具从模型工具列表中移除，调用会被拦截。参考 `@firstpick/pi-extension-tools` 的核心机制精简实现（无搜索、无排序关键词、无按模型配置）。
+
+**命令**：
+
+| 命令 | 作用 |
+|---|---|
+| `/tools` | 编辑会话选择（存为 custom entry，分支切换后保持） |
+| `/tools global` | 编辑全局选择（写入 `~/.pi/agent/tool-toggle.json`，对新会话生效） |
+| `/tools clear` | 清除会话选择（回退到全局/运行时默认） |
+| `/tools clear global` | 清除全局选择（删除配置文件） |
+
+**按键**：`↑/↓` 移动 · `空格` 切换 · `a` 全选/全不选 · `回车` 应用 · `Esc` 取消
+
+**作用域优先级**：会话选择 > 全局选择 > 运行时默认。
+
+**生效机制**：
+
+- `pi.setActiveTools()` 裁剪当前激活工具列表
+- `context_with_system` 事件追加 `toolsRemoved` 系统消息，请求载荷中同样移除（覆盖后注册的工具）
+- `tool_call` 事件兜底拦截被禁工具的调用
+
+仅在交互式 TUI 会话生效；RPC / print 模式不受影响。
+
 ---
 
 ## 📦 安装
@@ -301,6 +327,9 @@ pi-extensions/
         ├── extra-agents-files.ts
         ├── auto-add-dir.ts
         ├── router-bridge.ts
+        ├── whoami.ts
+        ├── zhipu-provider.ts
+        ├── tool-toggle.ts
         ├── patch/
         │   ├── index.ts    # 工具注册 + TUI 渲染
         │   └── core.ts     # 编辑逻辑 + diff 生成
