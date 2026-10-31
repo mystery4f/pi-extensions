@@ -135,7 +135,7 @@ function deleteGlobalFile(): void {
  * (all → enabled → disabled), ctrl+s saves in place (the picker stays
  * open), esc closes without saving.
  */
-class ToolTogglePicker {
+export class ToolTogglePicker {
 	readonly width = 64;
 	private cursor = 0;
 	private scrollOffset = 0;
@@ -215,8 +215,8 @@ class ToolTogglePicker {
 		// row when it is still visible, otherwise clamp into range.
 		const rows = this.visibleRows();
 		const before = rows[this.cursor]?.name;
-		if (this.cursor < 0) this.cursor = 0;
-		if (this.cursor >= rows.length) this.cursor = rows.length - 1;
+		if (rows.length === 0) this.cursor = 0;
+		else if (this.cursor >= rows.length) this.cursor = rows.length - 1;
 		const kept = rows.findIndex((row) => row.name === before);
 		if (kept >= 0) this.cursor = kept;
 		this.clampScroll();
@@ -231,8 +231,9 @@ class ToolTogglePicker {
 
 	private clampScroll(): void {
 		const last = this.visibleRows().length - 1;
-		if (this.cursor > last) this.cursor = last;
+		if (this.cursor > last) this.cursor = Math.max(0, last);
 		if (this.cursor < this.scrollOffset) this.scrollOffset = this.cursor;
+		if (this.scrollOffset < 0) this.scrollOffset = 0;
 		if (this.cursor >= this.scrollOffset + MAX_VISIBLE_ROWS) {
 			this.scrollOffset = this.cursor - MAX_VISIBLE_ROWS + 1;
 		}
@@ -253,7 +254,7 @@ class ToolTogglePicker {
 			status += this.theme.fg("success", `  ${this.savedMessage}`);
 		} else if (this.query) {
 			status += this.theme.fg("dim", `  (${rows.length}/${this.rows.length} match)`);
-		} else if (this.rows.length > MAX_VISIBLE_ROWS) {
+		} else if (visible.length > 0 && this.rows.length > MAX_VISIBLE_ROWS) {
 			status += this.theme.fg(
 				"dim",
 				`  (showing ${this.scrollOffset + 1}-${this.scrollOffset + visible.length})`,
@@ -262,6 +263,9 @@ class ToolTogglePicker {
 		lines.push(status);
 		if (this.searchMode) {
 			lines.push(this.theme.fg("accent", ` / ${this.query}█  (esc exits search)`));
+		} else {
+			// Reserve the search line slot so the overlay height never changes.
+			lines.push("");
 		}
 		lines.push("");
 
@@ -276,6 +280,11 @@ class ToolTogglePicker {
 			);
 			const source = this.theme.fg("dim", ` (${row.plugin ?? row.source})`);
 			lines.push(truncateToWidth(`${cursorMark} ${checkbox} ${name}${source}`, width - 2));
+		}
+		// Pad the row area to a fixed height so filtering/searching never
+		// collapses the overlay (constant height = stable TUI experience).
+		for (let i = visible.length; i < MAX_VISIBLE_ROWS; i++) {
+			lines.push("");
 		}
 
 		lines.push("");
