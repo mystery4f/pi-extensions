@@ -100,7 +100,7 @@ function pluginLabel(
 	return undefined;
 }
 
-/** Read the global file. `legacyEnabled` marks the old whitelist format. */
+/** Read the global file. Legacy whitelist (`enabledTools`) files are ignored. */
 function loadGlobalState(): { disabled?: Set<string>; legacyEnabled?: Set<string> } {
 	try {
 		const parsed = JSON.parse(fs.readFileSync(GLOBAL_FILE, "utf8")) as ToolsState;
@@ -131,7 +131,8 @@ function deleteGlobalFile(): void {
  *
  * Keys: up/down move, space toggles, a toggles the shown rows, "/" enters
  * search mode (type to filter by tool name, description, or plugin/package
- * name; backspace erases, esc leaves search), enter applies, esc cancels.
+ * name; backspace erases, esc leaves search), ctrl+s saves in place (the
+ * picker stays open), esc closes without saving.
  */
 class ToolTogglePicker {
 	readonly width = 64;
@@ -140,6 +141,7 @@ class ToolTogglePicker {
 	private checked: Set<string>;
 	private searchMode = false;
 	private query = "";
+	private savedMessage: string | null = null;
 
 	constructor(
 		private readonly theme: Theme,
@@ -147,6 +149,7 @@ class ToolTogglePicker {
 		private readonly rows: ToolRow[],
 		checkedNames: string[],
 		private readonly title: string,
+		private readonly onSave?: (checked: Set<string>) => void,
 	) {
 		this.checked = new Set(checkedNames);
 	}
@@ -164,6 +167,7 @@ class ToolTogglePicker {
 	}
 
 	handleInput(data: string): void {
+		this.savedMessage = null;
 		if (matchesKey(data, "escape")) {
 			if (this.searchMode) {
 				this.searchMode = false;
@@ -172,9 +176,11 @@ class ToolTogglePicker {
 				this.done(undefined);
 				return;
 			}
-		} else if (matchesKey(data, "return")) {
-			this.done(new Set(this.checked));
-			return;
+		} else if (matchesKey(data, "ctrl+s")) {
+			if (this.onSave) {
+				this.onSave(new Set(this.checked));
+				this.savedMessage = `Saved ✓ (${this.checked.size} enabled)`;
+			}
 		} else if (matchesKey(data, "up")) {
 			if (this.cursor > 0) this.cursor--;
 		} else if (matchesKey(data, "down")) {
@@ -233,7 +239,9 @@ class ToolTogglePicker {
 		lines.push("");
 		lines.push(this.theme.fg("accent", this.theme.bold(` ${this.title}`)));
 		let status = this.theme.fg("dim", ` ${enabledCount}/${this.rows.length} enabled`);
-		if (this.query) {
+		if (this.savedMessage) {
+			status += this.theme.fg("success", `  ${this.savedMessage}`);
+		} else if (this.query) {
 			status += this.theme.fg("dim", `  (${rows.length}/${this.rows.length} match)`);
 		} else if (this.rows.length > MAX_VISIBLE_ROWS) {
 			status += this.theme.fg(
@@ -264,7 +272,7 @@ class ToolTogglePicker {
 		lines.push(
 			this.theme.fg(
 				"dim",
-				" up/down move · space toggle · a toggle shown · / search · enter apply · esc cancel",
+				" up/down move · space toggle · a toggle shown · / search · ctrl+s save · esc close",
 			),
 		);
 		lines.push("");
@@ -314,17 +322,6 @@ export default function toolToggle(pi: ExtensionAPI) {
 		const globalState = loadGlobalState();
 		if (globalState.disabled) {
 			globalDisabled = globalState.disabled;
-		} else if (globalState.legacyEnabled) {
-			// One-time migration from the old whitelist (enabledTools) format:
-			// everything known today that was not enabled becomes disabled.
-			const legacy = globalState.legacyEnabled;
-			globalDisabled = new Set(
-				pi
-					.getAllTools()
-					.map((tool) => tool.name)
-					.filter((name) => !legacy.has(name)),
-			);
-			saveGlobalDisabled(globalDisabled);
 		}
 		sessionDisabled = undefined;
 		for (const entry of ctx.sessionManager.getBranch()) {
@@ -408,8 +405,53 @@ export default function toolToggle(pi: ExtensionAPI) {
 		globalDisabled = undefined;
 	});
 
+
+	/** Persist + enforce a picker selection; the picker flashes the feedback. */
+	const applySelection = (
+		ctx: ExtensionCommandContext,
+		scope: "session" | "global",
+		rows: ToolRow[],
+		checked: Set<string>,
+	): void => {
+		const disabledAfter = new Set(
+			rows.map((row) => row.name).filter((name) => !checked.has(name)),
+		);
+		if (scope === "global") {
+			globalDisabled = disabledAfter;
+			saveGlobalDisabled(disabledAfter);
+		} else {
+			sessionDisabled = disabledAfter;
+			pi.appendEntry(CUSTOM_TYPE, {
+				disabledTools: [...disabledAfter].sort(),
+			} satisfies ToolsState);
+		}
+		enforce(ctx);
+		warmStale = true;
+	};
 	pi.registerCommand("tools", {
 		description: "Interactively enable/disable tools (/tools, /tools global, /tools clear [global])",
+		getArgumentCompletions: (argumentPrefix: string) => {
+			const p = argumentPrefix.trim().toLowerCase();
+			const items = [
+				{
+					value: "global",
+					label: "global",
+					description: "Edit the global disabled list (new sessions)",
+				},
+				{
+					value: "clear",
+					label: "clear",
+					description: "Clear the session selection",
+				},
+				{
+					value: "clear global",
+					label: "clear global",
+					description: "Clear the global selection (delete the config file)",
+				},
+			];
+			const filtered = items.filter((item) => item.value.startsWith(p));
+			return filtered.length > 0 ? filtered : null;
+		},
 		handler: async (args: string, ctx: ExtensionCommandContext) => {
 			const trimmed = args.trim().toLowerCase();
 			const isGlobalScope = trimmed.includes("global");
@@ -452,30 +494,19 @@ export default function toolToggle(pi: ExtensionAPI) {
 				? "Tools — GLOBAL selection (new sessions)"
 				: "Tools — session selection";
 
-			const result = await ctx.ui.custom<Set<string> | undefined>(
+			await ctx.ui.custom<Set<string> | undefined>(
 				(tui, theme, keybindings, done) =>
-					new ToolTogglePicker(theme, done, rows, checkedNames, scopeLabel),
+					new ToolTogglePicker(
+						theme,
+						done,
+						rows,
+						checkedNames,
+						scopeLabel,
+						(checked) =>
+							applySelection(ctx, isGlobalScope ? "global" : "session", rows, checked),
+					),
 				{ overlay: true },
 			);
-			if (!result) return; // cancelled
-
-			const rowNames = rows.map((row) => row.name);
-			const disabledAfter = new Set(rowNames.filter((name) => !result.has(name)));
-			if (isGlobalScope) {
-				globalDisabled = disabledAfter;
-				saveGlobalDisabled(disabledAfter);
-			} else {
-				sessionDisabled = disabledAfter;
-				pi.appendEntry(CUSTOM_TYPE, {
-					disabledTools: [...disabledAfter].sort(),
-				} satisfies ToolsState);
-			}
-			enforce(ctx);
-			warmStale = true;
-			ctx.ui.notify(
-				`${result.size}/${rows.length} tools enabled (${isGlobalScope ? "global" : "session"}).`,
-				"info",
-			);
-		},
+			},
 	});
 }
