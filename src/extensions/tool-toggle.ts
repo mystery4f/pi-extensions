@@ -55,6 +55,7 @@ type ToolRow = {
 	name: string;
 	source: string;
 	description: string;
+	plugin?: string;
 };
 
 /** Short label for where a tool comes from (builtin / SDK / extension). */
@@ -64,6 +65,39 @@ function toolSourceLabel(tool: { name: string; sourceInfo?: { source?: string } 
 	if (source === "coding-agent") return "sdk";
 	if (source === "mcp") return "mcp";
 	return source ?? "extension";
+}
+
+/**
+ * Best-effort plugin/package name for a tool: npm package directory, git
+ * package owner/repo, or the top-level extension directory name.
+ */
+function pluginLabel(
+	sourceInfo?: { path?: string; origin?: string; baseDir?: string },
+): string | undefined {
+	if (!sourceInfo?.path) return undefined;
+	if (sourceInfo.origin !== "package") {
+		// Top-level extension file: use its directory name.
+		const dir = sourceInfo.baseDir ?? path.dirname(sourceInfo.path);
+		const base = path.basename(dir);
+		return base && ![".", "/", "\\"].includes(base) ? base : undefined;
+	}
+	const segments = sourceInfo.path.split(/[\\/]/);
+	const nm = segments.lastIndexOf("node_modules");
+	if (nm >= 0 && segments[nm + 1]) {
+		const pkg = segments[nm + 1];
+		return pkg.startsWith("@") ? `${pkg}/${segments[nm + 2]}` : pkg;
+	}
+	const git = segments.findIndex(
+		(seg) => seg === "git-github.com" || seg === "github.com",
+	);
+	if (git >= 0) {
+		// git-github.com/<hash>/<owner>/<repo> or git/github.com/<owner>/<repo>
+		const rest = segments
+			.slice(git + 1)
+			.filter((seg) => seg !== "." && !/^[0-9a-f]{6,}$/.test(seg));
+		return rest.length >= 2 ? rest.slice(0, 2).join("/") : undefined;
+	}
+	return undefined;
 }
 
 /** Read the global file. `legacyEnabled` marks the old whitelist format. */
@@ -96,8 +130,8 @@ function deleteGlobalFile(): void {
  * Scrollable checkbox list of all tools.
  *
  * Keys: up/down move, space toggles, a toggles the shown rows, "/" enters
- * search mode (type to filter by name/description, backspace erases, esc
- * leaves search), enter applies, esc cancels.
+ * search mode (type to filter by tool name, description, or plugin/package
+ * name; backspace erases, esc leaves search), enter applies, esc cancels.
  */
 class ToolTogglePicker {
 	readonly width = 64;
@@ -124,7 +158,8 @@ class ToolTogglePicker {
 		return this.rows.filter(
 			(row) =>
 				row.name.toLowerCase().includes(q) ||
-				row.description.toLowerCase().includes(q),
+				row.description.toLowerCase().includes(q) ||
+				(row.plugin !== undefined && row.plugin.toLowerCase().includes(q)),
 		);
 	}
 
@@ -221,7 +256,7 @@ class ToolTogglePicker {
 				this.checked.has(row.name) ? "success" : "dim",
 				row.name,
 			);
-			const source = this.theme.fg("dim", ` (${row.source})`);
+			const source = this.theme.fg("dim", ` (${row.plugin ?? row.source})`);
 			lines.push(truncateToWidth(`${cursorMark} ${checkbox} ${name}${source}`, width - 2));
 		}
 
@@ -405,6 +440,7 @@ export default function toolToggle(pi: ExtensionAPI) {
 					name: tool.name,
 					source: toolSourceLabel(tool),
 					description: tool.description ?? "",
+					plugin: pluginLabel(tool.sourceInfo),
 				}))
 				.sort((a, b) => a.name.localeCompare(b.name));
 			const disabled = effectiveDisabled();
