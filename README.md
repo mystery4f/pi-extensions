@@ -331,7 +331,7 @@ if (provider === "your-provider") {
 {
   "thinkingLoopGuard": {
     "enabled": true,
-    "providers": ["xiaomi", "xiaomi-token-plan-*"],
+    "providers": ["mimo-plan", "xiaomi", "xiaomi-token-plan-*"],
     "models": ["*mimo*"],
     "action": "abort",
     "windowTokens": 500,
