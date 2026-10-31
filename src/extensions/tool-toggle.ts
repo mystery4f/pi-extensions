@@ -179,7 +179,7 @@ class ToolTogglePicker {
 		} else if (matchesKey(data, "ctrl+s")) {
 			if (this.onSave) {
 				this.onSave(new Set(this.checked));
-				this.savedMessage = `Saved ✓ (${this.checked.size} enabled)`;
+				this.savedMessage = `保存成功 ✓ (${this.checked.size} enabled)`;
 			}
 		} else if (matchesKey(data, "up")) {
 			if (this.cursor > 0) this.cursor--;
