@@ -131,8 +131,9 @@ function deleteGlobalFile(): void {
  *
  * Keys: up/down move, space toggles, a toggles the shown rows, "/" enters
  * search mode (type to filter by tool name, description, or plugin/package
- * name; backspace erases, esc leaves search), ctrl+s saves in place (the
- * picker stays open), esc closes without saving.
+ * name; backspace erases, esc leaves search), f cycles the view filter
+ * (all → enabled → disabled), ctrl+s saves in place (the picker stays
+ * open), esc closes without saving.
  */
 class ToolTogglePicker {
 	readonly width = 64;
@@ -142,6 +143,7 @@ class ToolTogglePicker {
 	private searchMode = false;
 	private query = "";
 	private savedMessage: string | null = null;
+	private filter: "all" | "enabled" | "disabled" = "all";
 
 	constructor(
 		private readonly theme: Theme,
@@ -154,11 +156,14 @@ class ToolTogglePicker {
 		this.checked = new Set(checkedNames);
 	}
 
-	/** Rows after applying the search query (case-insensitive substring). */
+	/** Rows after applying the view filter and the search query. */
 	private visibleRows(): ToolRow[] {
-		if (!this.query) return this.rows;
+		let rows = this.rows;
+		if (this.filter === "enabled") rows = rows.filter((row) => this.checked.has(row.name));
+		else if (this.filter === "disabled") rows = rows.filter((row) => !this.checked.has(row.name));
+		if (!this.query) return rows;
 		const q = this.query.toLowerCase();
-		return this.rows.filter(
+		return rows.filter(
 			(row) =>
 				row.name.toLowerCase().includes(q) ||
 				row.description.toLowerCase().includes(q) ||
@@ -191,6 +196,9 @@ class ToolTogglePicker {
 			this.query = this.query.slice(0, -1);
 		} else if (!this.searchMode && data === "/") {
 			this.searchMode = true;
+		} else if (!this.searchMode && data === "f") {
+			this.filter =
+				this.filter === "all" ? "enabled" : this.filter === "enabled" ? "disabled" : "all";
 		} else if (this.searchMode && data.length === 1 && data.charCodeAt(0) >= 32) {
 			this.query += data;
 		} else if (matchesKey(data, "a")) {
@@ -239,6 +247,8 @@ class ToolTogglePicker {
 		lines.push("");
 		lines.push(this.theme.fg("accent", this.theme.bold(` ${this.title}`)));
 		let status = this.theme.fg("dim", ` ${enabledCount}/${this.rows.length} enabled`);
+		const viewLabel = this.filter === "all" ? "all" : this.filter === "enabled" ? "enabled" : "disabled";
+		status += this.theme.fg(this.filter === "all" ? "dim" : "accent", `  view:${viewLabel}`);
 		if (this.savedMessage) {
 			status += this.theme.fg("success", `  ${this.savedMessage}`);
 		} else if (this.query) {
@@ -272,7 +282,7 @@ class ToolTogglePicker {
 		lines.push(
 			this.theme.fg(
 				"dim",
-				" up/down move · space toggle · a toggle shown · / search · ctrl+s save · esc close",
+				" up/down move · space toggle · a toggle shown · / search · f view · ctrl+s save · esc close",
 			),
 		);
 		lines.push("");
