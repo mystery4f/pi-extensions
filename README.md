@@ -302,6 +302,7 @@ if (provider === "your-provider") {
 - `pi.setActiveTools()` 裁剪当前激活工具列表
 - `context_with_system` 事件追加 `toolsRemoved` 系统消息，请求载荷中同样移除（覆盖后注册的工具）
 - `tool_call` 事件兜底拦截被禁工具的调用
+- 清单变化后通过 `cache_warming_decision` 事件一次性停止旧进程的缓存保活重放（旧快照仍带旧工具清单，避免继续向服务端发送过期请求；下一条真实消息后自动恢复保活）
 
 仅在交互式 TUI 会话生效；RPC / print 模式不受影响。
 

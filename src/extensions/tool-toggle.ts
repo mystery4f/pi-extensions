@@ -22,6 +22,8 @@
  *   - a context_with_system handler appends a toolsRemoved system delta so the
  *     request payload also drops tools registered by later extensions
  *   - a tool_call handler rejects blocked calls defensively
+ * After any selection change, a one-shot cache_warming_decision handler stops
+ * Pi's idle cache warmer so the stale pre-change request is not re-sent.
  *
  * Deliberately minimal: no fuzzy search, no sort keywords, no per-model
  * configs — just the list, the checkboxes, and the scopes above.
@@ -61,17 +63,6 @@ function toolSourceLabel(tool: { name: string; sourceInfo?: { source?: string } 
 	return source ?? "extension";
 }
 
-/** Temporary diagnosis: append one JSON line per lifecycle event (remove after use). */
-function debugLog(message: string): void {
-	try {
-		fs.appendFileSync(
-			path.join(os.homedir(), ".pi", "agent", "tool-toggle-debug.log"),
-			JSON.stringify({ ts: new Date().toISOString(), pid: process.pid, msg: message }) + "\n",
-		);
-	} catch {
-		// diagnostics must never break the extension
-	}
-}
 
 function loadGlobalSelection(): Set<string> | undefined {
 	try {
@@ -203,6 +194,10 @@ export default function toolToggle(pi: ExtensionAPI) {
 	let sessionSelection: Set<string> | undefined;
 	let globalSelection: Set<string> | undefined;
 
+
+	// Set when the tool selection changes; consumed by the cache_warming
+	// decision handler to stop one stale warmer cycle.
+	let warmStale = false;
 	const effectiveSelection = (): Set<string> | undefined =>
 		sessionSelection ?? globalSelection;
 
@@ -227,27 +222,19 @@ export default function toolToggle(pi: ExtensionAPI) {
 	pi.on("session_start", async (_event, ctx) => {
 		const activeBefore = pi.getActiveTools();
 		tuiActive = ctx.mode === "tui";
-		if (!tuiActive) {
-			debugLog("session_start: skipped, mode=" + ctx.mode);
-			return;
-		}
+		if (!tuiActive) return;
 		runtimeBaseline ??= [...pi.getActiveTools()];
 		globalSelection = loadGlobalSelection();
 		sessionSelection = undefined;
-		let customFound = false;
 		for (const entry of ctx.sessionManager.getBranch()) {
 			if (entry.type === "custom" && entry.customType === CUSTOM_TYPE) {
 				const data = entry.data as ToolsState | undefined;
 				sessionSelection = new Set(data?.enabledTools ?? []);
-				customFound = true;
 			}
 		}
 		enforce(ctx);
-		debugLog(
-			`session_start: mode=${ctx.mode} branchCustom=${customFound} ` +
-			`sessionSel=${sessionSelection?.size ?? "none"} globalSel=${globalSelection?.size ?? "none"} ` +
-			`activeBefore=${activeBefore.length} activeAfter=${pi.getActiveTools().length}`,
-		);
+		// Any warmer now holds a pre-session-start request; stop it once.
+		warmStale = true;
 	});
 
 	pi.on("session_tree", async (_event, ctx) => {
@@ -263,12 +250,7 @@ export default function toolToggle(pi: ExtensionAPI) {
 	});
 
 	pi.on("model_select", async (_event, ctx) => enforce(ctx));
-	pi.on("before_agent_start", async (_event, ctx) => {
-		enforce(ctx);
-		debugLog(
-			`before_agent_start: mode=${ctx.mode} activeCount=${pi.getActiveTools().length}`,
-		);
-	});
+	pi.on("before_agent_start", async (_event, ctx) => enforce(ctx));
 
 	// Defensive rejection: anything that slipped past the active-list trim.
 	pi.on("tool_call", (event, ctx) => {
@@ -309,6 +291,15 @@ export default function toolToggle(pi: ExtensionAPI) {
 		};
 	});
 
+
+	// One-shot stop: after a selection change the idle warmer still holds the
+	// pre-change request. "stop" ends warming until the next real message,
+	// which recaptures fresh context with the new tool list.
+	pi.on("cache_warming_decision", () => {
+		if (!tuiActive || !warmStale) return;
+		warmStale = false;
+		return { action: "stop" };
+	});
 	pi.on("session_shutdown", async () => {
 		tuiActive = false;
 		runtimeBaseline = undefined;
@@ -333,6 +324,7 @@ export default function toolToggle(pi: ExtensionAPI) {
 					ctx.ui.notify("Session tool selection cleared.", "info");
 				}
 				enforce(ctx);
+				warmStale = true;
 				return;
 			}
 
@@ -372,6 +364,7 @@ export default function toolToggle(pi: ExtensionAPI) {
 				pi.appendEntry(CUSTOM_TYPE, { enabledTools: [...result].sort() } satisfies ToolsState);
 			}
 			enforce(ctx);
+			warmStale = true;
 			ctx.ui.notify(
 				`${result.size}/${rows.length} tools enabled (${isGlobalScope ? "global" : "session"}).`,
 				"info",
