@@ -13,6 +13,7 @@ A collection of [Pi coding agent](https://github.com/earendil-works/pi-coding-ag
 | [patch](#patch) | 精确字符串替换文件编辑工具，支持锚点定位和 diff 预览 |
 | [codegraph-guidance](#codegraph-guidance) | 检测 codegraph MCP 工具并注入使用指南到 system prompt |
 | [tool-toggle](#tool-toggle) | `/tools` 交互式启用/禁用工具（会话或全局作用域） |
+| [thinking-loop-guard](#thinking-loop-guard) | 检测 thinking/正文流式复读循环，警告并自动中止（MiMo 等模型的思考死循环兜底） |
 
 ---
 
@@ -308,6 +309,55 @@ if (provider === "your-provider") {
 仅在交互式 TUI 会话生效；RPC / print 模式不受影响。
 
 ---
+### thinking-loop-guard
+
+检测模型在 thinking / 正文流式输出中的复读循环（典型场景：MiMo 长思考陷入推理死循环，重复同一段 token 直到 max_tokens 或超时烧完），命中后通知用户并默认自动中止当前 run。
+
+**背景**：MiMo 系列模型在长思考场景存在广泛报告的推理循环问题（学术论文 arxiv 2512.12895 指出根因是 RL 训练中"循环动作"比"正确下一步"更易学习；小米官方博客确认并已用 MOPD 修复部分场景）。但线上仍可能遇到旧版本或新变种，此扩展作为客户端兜底：检测到循环立即止损，不再空烧 token。
+
+**检测算法**：连续周期重复（与 MiMo Code 内置复读检测同思路）。维护一个滑动 token 窗口（默认 500 token），对每个候选周期 `p ∈ [minPeriod, window/threshold]`，检查窗口尾部是否有连续 `p×(threshold-1)` 个位置满足 `tok[i] == tok[i+p]`（即同一 token 块首尾相接重复 ≥ threshold 次），且该块内不同 token 数 ≥ `distinctMin`（排除纯空白/标点填充的退化块）。命中即判定循环。分词规则：拉丁文按词，CJK 逐字。
+
+**特性**：
+
+- 🔁 **双流检测** — thinking 和正文 text 流用同一套检测器，独立计数
+- 🎯 **按 provider/model 开关** — glob 匹配（如 `xiaomi`、`*mimo*`），只对你指定的模型生效，默认关闭不影响其他扩展用户
+- ⚡ **在线检测** — 逐 token 增量触发，循环形成后尽快止损，不等整个段落生成完
+- 🔕 **可降级为仅警告** — `action: "warn"` 时不中止，只提示
+- 🧩 **配置分层** — 全局 `~/.pi/agent/settings.json` → 项目 `.pi/settings.json`（覆盖）→ 环境变量（最高）
+
+**配置**（`~/.pi/agent/settings.json` 或项目 `.pi/settings.json`）：
+
+```json
+{
+  "thinkingLoopGuard": {
+    "enabled": true,
+    "providers": ["xiaomi", "xiaomi-token-plan-*"],
+    "models": ["*mimo*"],
+    "action": "abort",
+    "windowTokens": 500,
+    "minPeriod": 4,
+    "threshold": 20,
+    "distinctMin": 3
+  }
+}
+```
+
+| 字段 | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| `enabled` | `boolean` | `false` | 总开关。默认关闭，显式配置才生效 |
+| `providers` | `string[]` | `[]` | provider glob 列表，命中即开启检测。空 = 不按 provider 匹配 |
+| `models` | `string[]` | `[]` | model id glob 列表，命中即开启检测。空 = 不按 model 匹配 |
+| `action` | `"abort" \| "warn"` | `"abort"` | `abort` 警告并中止 run；`warn` 仅警告 |
+| `windowTokens` | `number` | `500` | 滑动窗口 token 数 |
+| `minPeriod` | `number` | `4` | 最短循环周期（token 数），块小于该值不判循环 |
+| `threshold` | `number` | `20` | 同一块连续重复次数阈值 |
+| `distinctMin` | `number` | `3` | 循环块内最少不同 token 数，防退化误报 |
+
+**环境变量覆盖**（优先级最高）：`THINKING_LOOP_GUARD_ENABLED`、`THINKING_LOOP_GUARD_PROVIDERS`（逗号分隔）、`THINKING_LOOP_GUARD_MODELS`（逗号分隔）、`THINKING_LOOP_GUARD_ACTION`、`THINKING_LOOP_GUARD_WINDOW`、`THINKING_LOOP_GUARD_MIN_PERIOD`、`THINKING_LOOP_GUARD_THRESHOLD`、`THINKING_LOOP_GUARD_DISTINCT_MIN`。
+
+**注意**：pi 没有"截断思考段但继续生成答案"的 API，中止是整个 run 级别的——已流出的内容保留在会话历史中，可手动追加提示词让模型换思路继续。
+
+---
 
 ## 📦 安装
 
@@ -332,6 +382,7 @@ pi-extensions/
         ├── whoami.ts
         ├── zhipu-provider.ts
         ├── tool-toggle.ts
+        ├── thinking-loop-guard.ts
         ├── patch/
         │   ├── index.ts    # 工具注册 + TUI 渲染
         │   └── core.ts     # 编辑逻辑 + diff 生成
