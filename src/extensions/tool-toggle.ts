@@ -14,8 +14,8 @@
  * migrated once on session start.
  *
  * Commands:
- *   /tools              edit the session selection
- *   /tools global       edit the global selection (applies to new sessions)
+ *   /tools              edit the selection; press "s" to switch scope
+ *                       (session ↔ global, global applies to new sessions)
  *   /tools clear        drop the session selection (inherit global/runtime)
  *   /tools clear global drop the global selection
  *
@@ -132,28 +132,39 @@ function deleteGlobalFile(): void {
  * Keys: up/down move, space toggles, a toggles the shown rows, "/" enters
  * search mode (type to filter by tool name, description, or plugin/package
  * name; backspace erases, esc leaves search), f cycles the view filter
- * (all → enabled → disabled), ctrl+s saves in place (the picker stays
- * open), esc closes without saving.
+ * (all → enabled → disabled), s switches the scope (session ↔ global).
+ * Each scope keeps its OWN working copy of the checkbox state, so toggles
+ * made in one scope are not carried into the other; switching also re-clamps
+ * the cursor because the enabled/disabled view filter now keys off the
+ * other scope's copy. ctrl+s saves the current scope's copy in place (the
+ * picker stays open), esc closes without saving.
  */
 export class ToolTogglePicker {
 	readonly width = 64;
 	private cursor = 0;
 	private scrollOffset = 0;
-	private checked: Set<string>;
+	private readonly checkedByScope: { session: Set<string>; global: Set<string> };
 	private searchMode = false;
 	private query = "";
 	private savedMessage: string | null = null;
 	private filter: "all" | "enabled" | "disabled" = "all";
-
+	private scope: "session" | "global" = "session";
 	constructor(
 		private readonly theme: Theme,
 		private readonly done: (result: Set<string> | undefined) => void,
 		private readonly rows: ToolRow[],
-		checkedNames: string[],
-		private readonly title: string,
-		private readonly onSave?: (checked: Set<string>) => void,
+		initialChecked: (scope: "session" | "global") => Set<string>,
+		private readonly onSave?: (scope: "session" | "global", checked: Set<string>) => void,
 	) {
-		this.checked = new Set(checkedNames);
+		this.checkedByScope = {
+			session: initialChecked("session"),
+			global: initialChecked("global"),
+		};
+	}
+
+	/** Live checkbox set for the scope currently being edited. */
+	private get checked(): Set<string> {
+		return this.checkedByScope[this.scope];
 	}
 
 	/** Rows after applying the view filter and the search query. */
@@ -183,7 +194,7 @@ export class ToolTogglePicker {
 			}
 		} else if (matchesKey(data, "ctrl+s")) {
 			if (this.onSave) {
-				this.onSave(new Set(this.checked));
+				this.onSave(this.scope, new Set(this.checked));
 				this.savedMessage = `保存成功 ✓ (${this.checked.size} enabled)`;
 			}
 		} else if (matchesKey(data, "up")) {
@@ -199,6 +210,9 @@ export class ToolTogglePicker {
 		} else if (!this.searchMode && data === "f") {
 			this.filter =
 				this.filter === "all" ? "enabled" : this.filter === "enabled" ? "disabled" : "all";
+		} else if (!this.searchMode && matchesKey(data, "s")) {
+			this.scope = this.scope === "session" ? "global" : "session";
+			this.savedMessage = `已切换到 ${this.scope} ✓`;
 		} else if (this.searchMode && data.length === 1 && data.charCodeAt(0) >= 32) {
 			this.query += data;
 		} else if (matchesKey(data, "a")) {
@@ -246,7 +260,11 @@ export class ToolTogglePicker {
 		const enabledCount = this.checked.size;
 
 		lines.push("");
-		lines.push(this.theme.fg("accent", this.theme.bold(` ${this.title}`)));
+		const scopeLabel =
+			this.scope === "global"
+				? "Tools — GLOBAL selection (new sessions)"
+				: "Tools — session selection";
+		lines.push(this.theme.fg("accent", this.theme.bold(` ${scopeLabel}`)));
 		let status = this.theme.fg("dim", ` ${enabledCount}/${this.rows.length} enabled`);
 		const viewLabel = this.filter === "all" ? "all" : this.filter === "enabled" ? "enabled" : "disabled";
 		status += this.theme.fg(this.filter === "all" ? "dim" : "accent", `  view:${viewLabel}`);
@@ -291,7 +309,7 @@ export class ToolTogglePicker {
 		lines.push(
 			this.theme.fg(
 				"dim",
-				" up/down move · space toggle · a toggle shown · / search · f view · ctrl+s save · esc close",
+				" up/down move · space toggle · a toggle shown · / search · f view · s scope · ctrl+s save · esc close",
 			),
 		);
 		lines.push("");
@@ -448,15 +466,10 @@ export default function toolToggle(pi: ExtensionAPI) {
 		warmStale = true;
 	};
 	pi.registerCommand("tools", {
-		description: "Interactively enable/disable tools (/tools, /tools global, /tools clear [global])",
+		description: "Interactively enable/disable tools (/tools, /tools clear [global])",
 		getArgumentCompletions: (argumentPrefix: string) => {
 			const p = argumentPrefix.trim().toLowerCase();
 			const items = [
-				{
-					value: "global",
-					label: "global",
-					description: "Edit the global disabled list (new sessions)",
-				},
 				{
 					value: "clear",
 					label: "clear",
@@ -473,11 +486,15 @@ export default function toolToggle(pi: ExtensionAPI) {
 		},
 		handler: async (args: string, ctx: ExtensionCommandContext) => {
 			const trimmed = args.trim().toLowerCase();
-			const isGlobalScope = trimmed.includes("global");
-			const isClear = trimmed.startsWith("clear");
+			const isClearGlobal = trimmed === "clear global";
+			const isClear = trimmed === "clear" || isClearGlobal;
+			if (trimmed && !isClear) {
+				ctx.ui.notify(`Unknown argument "${trimmed}". Usage: /tools [clear [global]]`, "warning");
+				return;
+			}
 
 			if (isClear) {
-				if (isGlobalScope) {
+				if (isClearGlobal) {
 					globalDisabled = undefined;
 					deleteGlobalFile();
 					ctx.ui.notify("Global tool selection cleared.", "info");
@@ -504,14 +521,17 @@ export default function toolToggle(pi: ExtensionAPI) {
 					plugin: pluginLabel(tool.sourceInfo),
 				}))
 				.sort((a, b) => a.name.localeCompare(b.name));
-			const disabled = effectiveDisabled();
-			const checkedNames = disabled
-				? rows.map((row) => row.name).filter((name) => !disabled.has(name))
-				: [...pi.getActiveTools()];
+			// Per-scope initial checkbox state. The global view falls back to the
+			// runtime baseline (not the live active list, which session
+			// enforcement has already trimmed) so session state never leaks
+			// into what the global file would hold.
+			const initialChecked = (scope: "session" | "global"): Set<string> => {
+				const disabled = scope === "global" ? globalDisabled : effectiveDisabled();
+				return disabled
+					? new Set(rows.map((row) => row.name).filter((name) => !disabled.has(name)))
+					: new Set([...(runtimeBaseline ?? []), ...pi.getActiveTools()]);
+			};
 
-			const scopeLabel = isGlobalScope
-				? "Tools — GLOBAL selection (new sessions)"
-				: "Tools — session selection";
 
 			await ctx.ui.custom<Set<string> | undefined>(
 				(tui, theme, keybindings, done) =>
@@ -519,10 +539,9 @@ export default function toolToggle(pi: ExtensionAPI) {
 						theme,
 						done,
 						rows,
-						checkedNames,
-						scopeLabel,
-						(checked) =>
-							applySelection(ctx, isGlobalScope ? "global" : "session", rows, checked),
+						initialChecked,
+						(scope, checked) =>
+							applySelection(ctx, scope, rows, checked),
 					),
 				{ overlay: true },
 			);
