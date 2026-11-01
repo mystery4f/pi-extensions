@@ -140,7 +140,10 @@ function deleteGlobalFile(): void {
  * picker stays open), esc closes without saving.
  */
 export class ToolTogglePicker {
-	readonly width = 64;
+	// Width cap, not a fixed size: the overlay clamps this to the terminal
+	// width, so narrow terminals shrink the panel (footer truncates) while
+	// wide ones get the full key-hint line (~108 cols).
+	readonly width = 112;
 	private cursor = 0;
 	private scrollOffset = 0;
 	private readonly checkedByScope: { session: Set<string>; global: Set<string> };
@@ -309,7 +312,10 @@ export class ToolTogglePicker {
 		lines.push(
 			this.theme.fg(
 				"dim",
-				" up/down move · space toggle · a toggle shown · / search · f view · s scope · ctrl+s save · esc close",
+				truncateToWidth(
+					" up/down move · space toggle · a toggle shown · / search · f view · s scope · ctrl+s save · esc close",
+					width - 2,
+				),
 			),
 		);
 		lines.push("");
