@@ -243,6 +243,9 @@ export default function thinkingLoopGuard(pi: ExtensionAPI) {
 	let fired = false; // one abort per assistant message
 	// Retry escalation state. Reset only on a real user message.
 	let retries = 0;
+	// Deferred retry reminder: delivered only after the aborted run fully
+	// settles, so it starts a fresh turn instead of dying in the followUp queue.
+	let pendingReminder: string | undefined;
 	// Doom-loop state: identical same-args tool calls within one assistant message.
 	let lastToolSig = "";
 	let toolRepeat = 0;
@@ -286,9 +289,16 @@ export default function thinkingLoopGuard(pi: ExtensionAPI) {
 			"warning",
 		);
 		ctx.abort();
-		// Re-prompt AFTER abort so it lands as the next turn. The fixed prefix
-		// marks it synthetic so the retry counter ignores it.
-		pi.sendUserMessage(`[thinking-loop-guard] ${reminder}`, { deliverAs: "followUp" });
+		// Deliver the reminder only after the run settles: a followUp queued on
+		// the run we just killed is orphaned (abort never drains the queue).
+		pendingReminder = reminder;
+		// Backstop: if agent_settled never fires, deliver after 8s anyway.
+		setTimeout(() => {
+			if (pendingReminder === reminder) {
+				pendingReminder = undefined;
+				pi.sendUserMessage(`[thinking-loop-guard] ${reminder}`);
+			}
+		}, 8000);
 	};
 
 	// Reset escalation when a real user speaks. Skip our own synthetic re-prompts.
@@ -298,6 +308,17 @@ export default function thinkingLoopGuard(pi: ExtensionAPI) {
 		const text = typeof msg.content === "string" ? msg.content : "";
 		if (text.startsWith("[thinking-loop-guard]")) return;
 		retries = 0;
+		pendingReminder = undefined; // user took over; don't fire a stale reminder
+	});
+
+	// The run is fully settled (aborted or finished) and the session is idle:
+	// sendUserMessage without deliverAs now starts a fresh turn (prompt() →
+	// _startRun), instead of queueing on a dead run.
+	pi.on("agent_settled", () => {
+		const text = pendingReminder;
+		if (text === undefined) return;
+		pendingReminder = undefined;
+		pi.sendUserMessage(`[thinking-loop-guard] ${text}`);
 	});
 
 	pi.on("message_update", (event, ctx) => {

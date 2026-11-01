@@ -323,7 +323,7 @@ if (provider === "your-provider") {
 - 🎯 **按 provider/model 开关** — glob 匹配（如 `xiaomi`、`*mimo*`），只对你指定的模型生效，默认关闭不影响其他扩展用户
 - ⚡ **在线检测** — 逐 token 增量触发，循环形成后尽快止损，不等整个段落生成完
 - 🔕 **可降级为仅警告** — `action: "warn"` 时不中止，只提示
-- 🔄 **自动升级恢复** — `action: "retry"` 命中后中止并自动重来，第 1 次提醒换思路，第 2 次要求推倒重来，超过 `maxRetries` 次退回纯中止；收到真实用户消息后计数复位
+- 🔄 **自动升级恢复** — `action: "retry"` 命中后中止并自动重来，第 1 次提醒换思路，第 2 次要求推倒重来，超过 `maxRetries` 次退回纯中止；收到真实用户消息后计数复位。提醒在 run 彻底结束（`agent_settled`）后才投递——若随 `abort` 一起塞进 followUp 队列会成为孤儿卡在 queued（中止不清洗队列），8 秒兜底定时器防止事件丢失时提醒不发
 - 🛠️ **doom loop 检测** — 同一条回复里连续 `toolRepeatCount`（默认 3）次同名同参工具调用触发干预（与复读层共用同一套升级逻辑）
 - 🧩 **配置分层** — 全局 `~/.pi/agent/settings.json` → 项目 `.pi/settings.json`（覆盖）→ 环境变量（最高）
 
@@ -351,7 +351,7 @@ if (provider === "your-provider") {
 | `enabled` | `boolean` | `false` | 总开关。默认关闭，显式配置才生效 |
 | `providers` | `string[]` | `[]` | provider glob 列表，命中即开启检测。空 = 不按 provider 匹配 |
 | `models` | `string[]` | `[]` | model id glob 列表，命中即开启检测。空 = 不按 model 匹配 |
-| `action` | `"abort" \| "warn" \| "retry"` | `"abort"` | `abort` 警告并中止 run；`warn` 仅警告；`retry` 中止后自动重来并升级提醒（remind → replan → 超限退回纯中止），收到真实用户消息时计数复位 |
+| `action` | `"abort" \| "warn" \| "retry"` | `"abort"` | `abort` 警告并中止 run；`warn` 仅警告；`retry` 中止后自动重来并升级提醒（remind → replan → 超限退回纯中止），提醒在 run 彻底结束（`agent_settled`）后才投递，收到真实用户消息时计数复位 |
 | `maxRetries` | `number` | `2` | `action: "retry"` 时最多自动重试次数，超限退回纯中止 |
 | `toolRepeatCount` | `number` | `3` | doom loop 阈值：同一条回复里同名同参工具调用连续出现该次数即干预 |
 | `windowTokens` | `number` | `500` | 滑动窗口 token 数 |
