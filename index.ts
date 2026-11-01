@@ -8,6 +8,7 @@ import batchPatch from "./src/extensions/batch-patch/index.js";
 import whoami from "./src/extensions/whoami.js";
 import codegraphGuidance from "./src/extensions/codegraph-guidance.js";
 import toolToggle from "./src/extensions/tool-toggle.js";
+import toolRegistry from "./src/extensions/tool-registry.js";
 import thinkingLoopGuard from "./src/extensions/thinking-loop-guard.js";
 
 export default function (pi: ExtensionAPI) {
@@ -19,6 +20,7 @@ export default function (pi: ExtensionAPI) {
 	whoami(pi);
 	thinkingLoopGuard(pi);
 	toolToggle(pi);
+	toolRegistry(pi);
 	// batchPatch(pi);
 	// registerPatchTool(pi);
 	// codegraphGuidance(pi);

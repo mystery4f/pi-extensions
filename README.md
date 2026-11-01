@@ -13,6 +13,7 @@ A collection of [Pi coding agent](https://github.com/earendil-works/pi-coding-ag
 | [patch](#patch) | 精确字符串替换文件编辑工具，支持锚点定位和 diff 预览 |
 | [codegraph-guidance](#codegraph-guidance) | 检测 codegraph MCP 工具并注入使用指南到 system prompt |
 | [tool-toggle](#tool-toggle) | `/tools` 交互式启用/禁用工具（会话或全局作用域） |
+| [tool-registry](#tool-registry) | `registry` 工具：按插件查工具表 / 按工具查插件（`npm:` / `git:` 标识） |
 | [thinking-loop-guard](#thinking-loop-guard) | 检测 thinking/正文流式复读循环，警告并自动中止（MiMo 等模型的思考死循环兜底） |
 
 ---
@@ -308,6 +309,23 @@ if (provider === "your-provider") {
 仅在交互式 TUI 会话生效；RPC / print 模式不受影响。
 
 ---
+### tool-registry
+
+`registry` 工具：给 AI 用的双向查询，把工具和提供它的插件对应起来。插件用 `npm:<包名>` 或 `git:<owner>/<repo>` 标识（包名/`owner/repo` 裸写也会自动补前缀）。
+
+**查询方向**：
+
+| 参数 | 作用 |
+|---|---|
+| `tool=<工具名>` | 反查该工具来自哪个插件（附 scope、路径、首行描述；查不到时给相近工具名） |
+| `plugin=npm:<包>` / `plugin=git:<owner>/<repo>` | 列出该插件提供的全部工具 |
+| `listPlugins=true` | 列出所有插件及各自工具数（按数量降序） |
+
+**典型用法**：某个工具报错或行为异常时，先 `registry` 查它属于哪个插件，再决定是读插件源码、向上游报 bug，还是找同名工具的其他来源；要摸清一个插件的全部能力时用 `plugin` 方向。
+
+**实现要点**：插件归属复用 `tool-toggle` 的 `sourceInfo` 解析规则（npm 包取 `node_modules` 下包名，git 检出取 `owner/repo`，其余归到 source 标签）；工具清单来自注册时捕获的 `pi.getAllTools()`（工具 `execute()` 的 ctx 不提供列表方法）。
+
+---
 ### thinking-loop-guard
 
 检测模型在 thinking / 正文流式输出中的复读循环（典型场景：MiMo 长思考陷入推理死循环，重复同一段 token 直到 max_tokens 或超时烧完），命中后通知用户并默认自动中止当前 run。
@@ -387,6 +405,7 @@ pi-extensions/
         ├── whoami.ts
         ├── zhipu-provider.ts
         ├── tool-toggle.ts
+        ├── tool-registry.ts
         ├── thinking-loop-guard.ts
         ├── patch/
         │   ├── index.ts    # 工具注册 + TUI 渲染
