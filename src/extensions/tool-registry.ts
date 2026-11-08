@@ -124,8 +124,10 @@ function makeRegistryTool(listTools: () => ToolInfo[]) {
 	description:
 		"Look up the relationship between tools and the plugins that provide them. " +
 		"Query by plugin (list its tools) or by tool (find its plugin). Plugins are " +
-		"identified as npm:<pkg> or git:<owner>/<repo>. Use it to find where a tool " +
-		"comes from before debugging it, or to see everything one plugin provides.",
+		"identified as npm:<pkg> or git:<owner>/<repo>. Use it before debugging a tool, " +
+		"before writing a subagent's tools: whitelist or extensions: field, or to see " +
+		"everything one plugin provides — one call returns the tool names instead of " +
+		"reading the package source.",
 	parameters: Type.Object({
 		plugin: Type.Optional(
 			Type.String({
