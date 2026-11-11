@@ -65,24 +65,64 @@ const MAX_VISIBLE_ROWS = 15;
 const MAX_DETAIL_PARAMS = 12;
 /** Fixed rendered height of the detail panel: bigger content is truncated. */
 const DETAIL_HEIGHT = 14;
-/** Every binding, one row each: only "^?" keys stay in the footer (space). */
-const KEYMAP: ReadonlyArray<readonly [keys: string, action: string]> = [
-	["  ↑ / ↓", "move the cursor"],
-	["  space", "toggle the highlighted tool"],
-	["  a", "toggle every row currently shown"],
-	["  /", "search by tool name"],
-	["  p", "search by plugin name"],
-	["  tab", "swap the search target (while searching)"],
-	["  d", "detail panel (closes the keymap)"],
-	["  f", "view filter: all -> enabled -> disabled"],
-	["  s", "scope: session -> global"],
-	["  o", "sort: name -> count desc -> count asc"],
-	["  ctrl+s", "save the current scope (list stays open)"],
-	["  ?", "this keymap (closes the detail panel)"],
-	["  esc", "leave search / keymap, otherwise close"],
+/** One keymap line: the key label and what it does. */
+type HelpEntry = readonly [keys: string, action: string];
+/** A named group of bindings; groups are what the keymap panel lays out. */
+type HelpSection = { readonly title: string; readonly entries: readonly HelpEntry[] };
+
+/**
+ * Every binding, grouped the way the panel reads rather than by key order.
+ * The footer only has room for four of them, so the rest live here.
+ */
+const KEYMAP: readonly HelpSection[] = [
+	{
+		title: "navigate",
+		entries: [
+			["↑ / ↓", "previous / next row"],
+			["home / end", "first / last row"],
+			["PgUp / PgDn", "one screen at a time"],
+		],
+	},
+	{
+		title: "select",
+		entries: [
+			["space", "toggle the highlighted tool"],
+			["a", "toggle every row currently shown"],
+		],
+	},
+	{
+		title: "find",
+		entries: [
+			["/", "search by tool name"],
+			["p", "search by plugin name"],
+			["tab", "swap the search target while searching"],
+		],
+	},
+	{
+		title: "view",
+		entries: [
+			["d", "detail panel (closes this keymap)"],
+			["f", "filter: all -> enabled -> disabled"],
+			["s", "scope: session -> global"],
+			["o", "sort: name -> count desc -> count asc"],
+		],
+	},
+	{
+		title: "apply",
+		entries: [
+			["ctrl+s", "save the current scope"],
+			["?", "close this keymap"],
+			["esc", "leave search / keymap, otherwise close"],
+		],
+	},
 ];
-/** Rows rendered by the keymap: one per binding plus a header. */
-const HELP_HEIGHT = KEYMAP.length + 1;
+
+/** Rows the key column occupies, so every action starts at the same column. */
+const HELPER_KEY_WIDTH = 11;
+/** Gap between the two help columns. */
+const HELP_COLUMN_GAP = 3;
+/** Below this inner width the groups stack in a single column. */
+const HELP_TWO_COLUMN_WIDTH = 76;
 
 type ToolsState = { disabledTools?: string[]; enabledTools?: string[] };
 
@@ -313,6 +353,14 @@ export class ToolManagerPicker {
 			if (this.cursor > 0) this.cursor--;
 		} else if (matchesKey(data, "down")) {
 			if (this.cursor < this.visibleRows().length - 1) this.cursor++;
+		} else if (matchesKey(data, "home")) {
+			this.cursor = 0;
+		} else if (matchesKey(data, "end")) {
+			this.cursor = Math.max(0, this.visibleRows().length - 1);
+		} else if (matchesKey(data, "pageUp")) {
+			this.cursor = Math.max(0, this.cursor - MAX_VISIBLE_ROWS);
+		} else if (matchesKey(data, "pageDown")) {
+			this.cursor = Math.min(this.visibleRows().length - 1, this.cursor + MAX_VISIBLE_ROWS);
 		} else if (matchesKey(data, "space")) {
 			this.toggleCurrent();
 		} else if (this.searchMode && matchesKey(data, "tab")) {
@@ -469,21 +517,42 @@ export class ToolManagerPicker {
 	}
 
 	/**
-	 * Full keymap, exactly HELP_HEIGHT rows so toggling it does not resize the
-	 * overlay. Rows are truncated rather than wrapped: the key column must stay
-	 * visible even on a narrow terminal.
+	 * Keymap panel: bindings grouped into sections, with the action column
+	 * aligned. Wide terminals get two columns, otherwise the five groups would
+	 * outgrow the overlay; the height only depends on the width, so resizing
+	 * does not make the panel jump between keystrokes.
 	 */
 	private helpBlock(width: number): string[] {
-		const block = [this.theme.fg("dim", truncateToWidth(" keys (? to close)", width - 2))];
-		for (const [keys, action] of KEYMAP) {
-			block.push(
-				truncateToWidth(
-					`${this.theme.fg("accent", keys)}  ${this.theme.fg("dim", action)}`,
-					width - 2,
-				),
+		const inner = Math.max(24, width - 2);
+		const format = (section: HelpSection): string[] => {
+			const lines = [this.theme.bold(` ${section.title}`)];
+			for (const [keys, action] of section.entries) {
+				lines.push(
+					truncateToWidth(
+						`   ${this.theme.fg("accent", keys.padEnd(HELPER_KEY_WIDTH))} ${this.theme.fg("dim", action)}`,
+						inner,
+					),
+				);
+			}
+			return lines;
+		};
+		const twoColumns = inner >= HELP_TWO_COLUMN_WIDTH;
+		const columns = twoColumns ? [KEYMAP.slice(0, 3), KEYMAP.slice(3)] : [KEYMAP];
+		const rendered = columns.map((sections) => sections.flatMap(format));
+		const columnWidth = twoColumns
+			? Math.floor((inner - HELP_COLUMN_GAP) / 2)
+			: inner;
+		const height = Math.max(...rendered.map((lines) => lines.length));
+		const block = [
+			this.theme.fg("dim", truncateToWidth(" keys · ? or esc closes", width - 2)),
+		];
+		for (let row = 0; row < height; row++) {
+			const cells = rendered.map((lines) =>
+				truncateToWidth(lines[row] ?? "", columnWidth, "…", true),
 			);
+			block.push(truncateToWidth(cells.join(" ".repeat(HELP_COLUMN_GAP)), width - 2));
 		}
-		return block.slice(0, HELP_HEIGHT);
+		return block;
 	}
 
 	render(width: number): string[] {
