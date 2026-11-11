@@ -112,7 +112,7 @@ const KEYMAP: readonly HelpSection[] = [
 		title: "apply",
 		entries: [
 			["ctrl+s", "save the current scope"],
-			["Q / ctrl+q", "quit without saving (works while searching)"],
+			["alt+q", "like esc: leave search / keymap, else quit"],
 			["?", "close this keymap"],
 			["esc", "leave search / keymap, otherwise close"],
 		],
@@ -346,11 +346,21 @@ export class ToolManagerPicker {
 				this.done(undefined);
 				return;
 			}
-		} else if (matchesKey(data, "ctrl+q") || data === "Q") {
-			// Quit from anywhere, including mid-search, without saving. "Q" is the
-			// portable alias: Unix terminals with IXON swallow ctrl+q entirely.
-			this.done(undefined);
-			return;
+		} else if (matchesKey(data, "alt+q")) {
+			// Alt+q layers like esc: leave search or close the keymap first, and
+			// only quit from the top level. It is the only quit spelling: ctrl+q
+			// is swallowed by IXON on Unix terminals, and bare q/Q depends on the
+			// shift state.
+			if (this.helpOpen) {
+				this.helpOpen = false;
+			} else if (this.searchMode) {
+				this.searchMode = false;
+				this.searchTarget = "tool";
+				this.query = "";
+			} else {
+				this.done(undefined);
+				return;
+			}
 		} else if (matchesKey(data, "ctrl+s")) {
 			if (this.onSave) {
 				this.onSave(this.scope, new Set(this.checked));
@@ -643,7 +653,7 @@ export class ToolManagerPicker {
 			this.theme.fg(
 				"dim",
 				truncateToWidth(
-					" ↑↓ move · space toggle · ^s save · esc / Q close · ? help",
+					" ↑↓ move · space toggle · ^s save · esc / alt+q close · ? help",
 					width - 2,
 				),
 			),
