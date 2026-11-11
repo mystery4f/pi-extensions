@@ -112,6 +112,7 @@ const KEYMAP: readonly HelpSection[] = [
 		title: "apply",
 		entries: [
 			["ctrl+s", "save the current scope"],
+			["Q / ctrl+q", "quit without saving (works while searching)"],
 			["?", "close this keymap"],
 			["esc", "leave search / keymap, otherwise close"],
 		],
@@ -345,6 +346,9 @@ export class ToolManagerPicker {
 				this.done(undefined);
 				return;
 			}
+		} else if (matchesKey(data, "ctrl+q") || data === "Q") {
+			// Quit from anywhere, including mid-search, without saving. "Q" is the
+			// portable alias: Unix terminals with IXON swallow ctrl+q entirely.
 		} else if (matchesKey(data, "ctrl+s")) {
 			if (this.onSave) {
 				this.onSave(this.scope, new Set(this.checked));
@@ -637,7 +641,7 @@ export class ToolManagerPicker {
 			this.theme.fg(
 				"dim",
 				truncateToWidth(
-					" ↑↓ move · space toggle · ^s save · esc close · ? help",
+					" ↑↓ move · space toggle · ^s save · esc / Q close · ? help",
 					width - 2,
 				),
 			),
