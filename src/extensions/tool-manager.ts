@@ -349,6 +349,8 @@ export class ToolManagerPicker {
 		} else if (matchesKey(data, "ctrl+q") || data === "Q") {
 			// Quit from anywhere, including mid-search, without saving. "Q" is the
 			// portable alias: Unix terminals with IXON swallow ctrl+q entirely.
+			this.done(undefined);
+			return;
 		} else if (matchesKey(data, "ctrl+s")) {
 			if (this.onSave) {
 				this.onSave(this.scope, new Set(this.checked));
