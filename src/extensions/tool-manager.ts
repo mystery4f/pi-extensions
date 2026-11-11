@@ -9,7 +9,7 @@
  *
  * Scopes (highest priority first) — both persist DISABLED tool names only:
  *   1. session  — custom session entry {"disabledTools":[...]}
- *   2. global   — ~/.pi/agent/tool-toggle.json {"disabledTools":[...]}
+ *   2. global   — ~/.pi/agent/tool-manager.json {"disabledTools":[...]}
  *   3. runtime  — the tools Pi activated at startup (baseline)
  * A legacy global file in the old {"enabledTools":[...]} whitelist format is
  * migrated once on session start.
@@ -46,8 +46,8 @@ import type {
 	Theme,
 } from "@earendil-works/pi-coding-agent";
 
-const CUSTOM_TYPE = "tool-toggle-config";
-const GLOBAL_FILE = path.join(os.homedir(), ".pi", "agent", "tool-toggle.json");
+const CUSTOM_TYPE = "tool-manager-config";
+const GLOBAL_FILE = path.join(os.homedir(), ".pi", "agent", "tool-manager.json");
 const MAX_VISIBLE_ROWS = 15;
 const MAX_DETAIL_PARAMS = 12;
 /** Fixed rendered height of the detail panel: bigger content is truncated. */
@@ -196,7 +196,7 @@ function deleteGlobalFile(): void {
  * other scope's copy. ctrl+s saves the current scope's copy in place (the
  * picker stays open), esc closes without saving.
  */
-export class ToolTogglePicker {
+export class ToolManagerPicker {
 	// Width cap, not a fixed size: the overlay clamps this to the terminal
 	// width, so narrow terminals shrink the panel (footer truncates) while
 	// wide ones get the full key-hint line (~108 cols).
@@ -475,7 +475,7 @@ export class ToolTogglePicker {
 	}
 }
 
-export default function toolToggle(pi: ExtensionAPI) {
+export default function toolManager(pi: ExtensionAPI) {
 	// Enforcement only runs in interactive TUI sessions; RPC/print stay untouched.
 	let tuiActive = false;
 	let runtimeBaseline: string[] | undefined;
@@ -692,7 +692,7 @@ export default function toolToggle(pi: ExtensionAPI) {
 
 			await ctx.ui.custom<Set<string> | undefined>(
 				(tui, theme, keybindings, done) =>
-					new ToolTogglePicker(
+					new ToolManagerPicker(
 						theme,
 						done,
 						rows,

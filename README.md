@@ -12,7 +12,7 @@ A collection of [Pi coding agent](https://github.com/earendil-works/pi-coding-ag
 | [auto-add-dir](#auto-add-dir) | 检测用户输入中的关键词，自动将对应目录加入会话 |
 | [patch](#patch) | 精确字符串替换文件编辑工具，支持锚点定位和 diff 预览 |
 | [codegraph-guidance](#codegraph-guidance) | 检测 codegraph MCP 工具并注入使用指南到 system prompt |
-| [tool-toggle](#tool-toggle) | `/tools` 交互式启用/禁用工具（会话或全局作用域） |
+| [tool-manager](#tool-manager) | `/tools` 交互式启用/禁用工具（会话或全局作用域） |
 | [tool-registry](#tool-registry) | `registry` 工具：按插件查工具表 / 按工具查插件（`npm:` / `git:` 标识） |
 | [thinking-loop-guard](#thinking-loop-guard) | 检测 thinking/正文流式复读循环，警告并自动中止（MiMo 等模型的思考死循环兜底） |
 
@@ -282,7 +282,7 @@ if (provider === "your-provider") {
   LLM 自动调用 add_directory 加载完整目录
 ```
 
-### tool-toggle
+### tool-manager
 
 `/tools` 命令打开 TUI 复选框列表，交互式启用/禁用所有可用工具。被禁用的工具从模型工具列表中移除，调用会被拦截。搜索分成两类：`/` 只按**工具名称**过滤，`p` 只按**插件名称**（来源包或扩展目录）过滤，搜索中按 `Tab` 互换目标。`d` 打开详情面板，查看当前高亮工具的完整描述、来源/暴露方式以及参数列表（名称、类型、是否必填、说明）。参考 `@firstpick/pi-extension-tools` 的核心机制精简实现（无模糊搜索、无排序关键词、无按模型配置）。
 
@@ -323,7 +323,7 @@ if (provider === "your-provider") {
 
 **典型用法**：某个工具报错或行为异常时，先 `registry` 查它属于哪个插件，再决定是读插件源码、向上游报 bug，还是找同名工具的其他来源；要摸清一个插件的全部能力时用 `plugin` 方向。
 
-**实现要点**：插件归属复用 `tool-toggle` 的 `sourceInfo` 解析规则（npm 包取 `node_modules` 下包名，git 检出取 `owner/repo`，其余归到 source 标签）；工具清单来自注册时捕获的 `pi.getAllTools()`（工具 `execute()` 的 ctx 不提供列表方法）。
+**实现要点**：插件归属复用 `tool-manager` 的 `sourceInfo` 解析规则（npm 包取 `node_modules` 下包名，git 检出取 `owner/repo`，其余归到 source 标签）；工具清单来自注册时捕获的 `pi.getAllTools()`（工具 `execute()` 的 ctx 不提供列表方法）。
 
 ---
 ### thinking-loop-guard
@@ -404,7 +404,7 @@ pi-extensions/
         ├── router-bridge.ts
         ├── whoami.ts
         ├── zhipu-provider.ts
-        ├── tool-toggle.ts
+        ├── tool-manager.ts
         ├── tool-registry.ts
         ├── thinking-loop-guard.ts
         ├── patch/

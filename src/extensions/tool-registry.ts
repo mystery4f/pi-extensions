@@ -9,7 +9,7 @@
  * where it came from before guessing — e.g. deciding whether to read the plugin's
  * source, report a bug upstream, or look for a same-named tool from another plugin.
  *
- * Plugin identity is derived from `sourceInfo` the same way `tool-toggle` renders it
+ * Plugin identity is derived from `sourceInfo` the same way `tool-manager` renders it
  * in the picker: npm packages become `npm:<pkg>` and git checkouts become
  * `git:<owner>/<repo>`; built-in and other sources keep their source label with no
  * prefix. Tools with no resolvable plugin are grouped under their source label.
@@ -36,7 +36,7 @@ type PluginEntry = {
 };
 
 /**
- * Resolve the plugin key for one tool. Mirrors `pluginLabel()` in tool-toggle:
+ * Resolve the plugin key for one tool. Mirrors `pluginLabel()` in tool-manager:
  * package → `npm:<pkg>`, git checkout → `git:<owner>/<repo>`, otherwise the source label.
  */
 function pluginOf(tool: ToolInfo): { key: PluginKey; origin: "npm" | "git" | "source"; detail: string } {
