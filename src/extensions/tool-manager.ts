@@ -9,7 +9,7 @@
  *
  * Scopes (highest priority first) — both persist DISABLED tool names only:
  *   1. session  — custom session entry {"disabledTools":[...]}
- *   2. global   — ~/.pi/agent/tool-manager.json {"disabledTools":[...]}
+ *   2. global   — ~/.pi/agent/tool-manager/tool-manager.json {"disabledTools":[...]}
  *   3. runtime  — the tools Pi activated at startup (baseline)
  * A legacy global file in the old {"enabledTools":[...]} whitelist format is
  * migrated once on session start.
@@ -28,17 +28,31 @@
  * After any selection change, a one-shot cache_warming_decision handler stops
  * Pi's idle cache warmer so the stale pre-change request is not re-sent.
  *
- * Deliberately minimal: no fuzzy search, no sort keywords, no per-model
- * configs — just the list, the checkboxes, two search targets (tool name /
- * plugin name), a detail panel, and the scopes above.
+ * Usage accounting (docs/adr/0001-per-device-usage-jsonl.md): every executed
+ * call is counted, aggregated in memory, and appended to
+ * ~/.pi/agent/tool-manager/data/usage-<device>.jsonl at each turn end. The
+ * picker merges every device file and can sort by frequency ("o").
+ *
+ * Deliberately minimal: no fuzzy search, no per-model configs — just the list,
+ * the checkboxes, two search targets (tool name / plugin name), a detail panel,
+ * the scopes above, and a usage column whose sort key cycles with "o".
  *
  * @author mystery4f
  */
 
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { matchesKey, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import {
+	CONFIG_FILE,
+	DATA_DIR,
+	clearUsage,
+	createUsageRecorder,
+	deviceName,
+	formatUsageTable,
+	migrateLegacyConfig,
+	readMergedUsage,
+} from "./tool-manager-usage.js";
 import type {
 	ExtensionAPI,
 	ExtensionCommandContext,
@@ -47,11 +61,28 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 
 const CUSTOM_TYPE = "tool-manager-config";
-const GLOBAL_FILE = path.join(os.homedir(), ".pi", "agent", "tool-manager.json");
 const MAX_VISIBLE_ROWS = 15;
 const MAX_DETAIL_PARAMS = 12;
 /** Fixed rendered height of the detail panel: bigger content is truncated. */
 const DETAIL_HEIGHT = 14;
+/** Every binding, one row each: only "^?" keys stay in the footer (space). */
+const KEYMAP: ReadonlyArray<readonly [keys: string, action: string]> = [
+	["  ↑ / ↓", "move the cursor"],
+	["  space", "toggle the highlighted tool"],
+	["  a", "toggle every row currently shown"],
+	["  /", "search by tool name"],
+	["  p", "search by plugin name"],
+	["  tab", "swap the search target (while searching)"],
+	["  d", "detail panel (closes the keymap)"],
+	["  f", "view filter: all -> enabled -> disabled"],
+	["  s", "scope: session -> global"],
+	["  o", "sort: name -> count desc -> count asc"],
+	["  ctrl+s", "save the current scope (list stays open)"],
+	["  ?", "this keymap (closes the detail panel)"],
+	["  esc", "leave search / keymap, otherwise close"],
+];
+/** Rows rendered by the keymap: one per binding plus a header. */
+const HELP_HEIGHT = KEYMAP.length + 1;
 
 type ToolsState = { disabledTools?: string[]; enabledTools?: string[] };
 
@@ -63,6 +94,12 @@ type ToolRow = {
 	/** Raw JSON Schema for the tool's parameters, used by the detail panel. */
 	parameters?: unknown;
 	exposure?: string;
+	/** Merged executed-call count across every device file. */
+	usage?: number;
+	/** Failed calls inside {@link usage}. */
+	usageErrors?: number;
+	/** Latest use timestamp (ISO) across devices. */
+	lastUsed?: string;
 };
 
 /** One parameter row rendered by the detail panel. */
@@ -158,7 +195,7 @@ function describeParameters(parameters: unknown): ParamRow[] {
 /** Read the global file. Legacy whitelist (`enabledTools`) files are ignored. */
 function loadGlobalState(): { disabled?: Set<string>; legacyEnabled?: Set<string> } {
 	try {
-		const parsed = JSON.parse(fs.readFileSync(GLOBAL_FILE, "utf8")) as ToolsState;
+		const parsed = JSON.parse(fs.readFileSync(CONFIG_FILE, "utf8")) as ToolsState;
 		if (parsed.disabledTools) return { disabled: new Set(parsed.disabledTools) };
 		if (parsed.enabledTools) return { legacyEnabled: new Set(parsed.enabledTools) };
 		return {};
@@ -169,13 +206,13 @@ function loadGlobalState(): { disabled?: Set<string>; legacyEnabled?: Set<string
 
 function saveGlobalDisabled(disabled: Set<string>): void {
 	const payload: ToolsState = { disabledTools: [...disabled].sort() };
-	fs.mkdirSync(path.dirname(GLOBAL_FILE), { recursive: true });
-	fs.writeFileSync(GLOBAL_FILE, JSON.stringify(payload, null, "\t") + "\n", "utf8");
+	fs.mkdirSync(path.dirname(CONFIG_FILE), { recursive: true });
+	fs.writeFileSync(CONFIG_FILE, JSON.stringify(payload, null, "\t") + "\n", "utf8");
 }
 
 function deleteGlobalFile(): void {
 	try {
-		fs.unlinkSync(GLOBAL_FILE);
+		fs.unlinkSync(CONFIG_FILE);
 	} catch {
 		// already absent — fine
 	}
@@ -208,10 +245,14 @@ export class ToolManagerPicker {
 	/** Which field the query filters on: tool name or plugin name. */
 	private searchTarget: "tool" | "plugin" = "tool";
 	private detailOpen = false;
+	/** Keymap panel opened by "?"; the footer only has room for the core keys. */
+	private helpOpen = false;
 	private query = "";
 	private savedMessage: string | null = null;
 	private filter: "all" | "enabled" | "disabled" = "all";
 	private scope: "session" | "global" = "session";
+	/** Sort key cycled by "o": name → count desc → count asc. */
+	private sort: "name" | "count-desc" | "count-asc" = "name";
 	constructor(
 		private readonly theme: Theme,
 		private readonly done: (result: Set<string> | undefined) => void,
@@ -231,22 +272,31 @@ export class ToolManagerPicker {
 	}
 
 	/** Rows after applying the view filter and the current search target. */
+	/** Rows after the view filter, the search target and the sort key. */
 	private visibleRows(): ToolRow[] {
 		let rows = this.rows;
 		if (this.filter === "enabled") rows = rows.filter((row) => this.checked.has(row.name));
 		else if (this.filter === "disabled") rows = rows.filter((row) => !this.checked.has(row.name));
-		if (!this.query) return rows;
-		const q = this.query.toLowerCase();
-		if (this.searchTarget === "plugin") {
-			return rows.filter((row) => (row.plugin ?? row.source).toLowerCase().includes(q));
+		if (this.query) {
+			const q = this.query.toLowerCase();
+			rows =
+				this.searchTarget === "plugin"
+					? rows.filter((row) => (row.plugin ?? row.source).toLowerCase().includes(q))
+					: rows.filter((row) => row.name.toLowerCase().includes(q));
 		}
-		return rows.filter((row) => row.name.toLowerCase().includes(q));
+		if (this.sort === "name") return rows;
+		const direction = this.sort === "count-desc" ? -1 : 1;
+		return [...rows].sort(
+			(a, b) => direction * ((a.usage ?? 0) - (b.usage ?? 0)) || a.name.localeCompare(b.name),
+		);
 	}
 
 	handleInput(data: string): void {
 		this.savedMessage = null;
 		if (matchesKey(data, "escape")) {
-			if (this.searchMode) {
+			if (this.helpOpen) {
+				this.helpOpen = false;
+			} else if (this.searchMode) {
 				this.searchMode = false;
 				this.searchTarget = "tool";
 				this.query = "";
@@ -278,10 +328,23 @@ export class ToolManagerPicker {
 			this.searchTarget = "plugin";
 			this.query = "";
 		} else if (!this.searchMode && data === "d") {
+			// Detail and keymap share the space under the list: opening one closes
+			// the other, otherwise the overlay outgrows a normal terminal.
 			this.detailOpen = !this.detailOpen;
+			if (this.detailOpen) this.helpOpen = false;
 		} else if (!this.searchMode && data === "f") {
 			this.filter =
 				this.filter === "all" ? "enabled" : this.filter === "enabled" ? "disabled" : "all";
+		} else if (!this.searchMode && data === "o") {
+			this.sort =
+				this.sort === "name"
+					? "count-desc"
+					: this.sort === "count-desc"
+						? "count-asc"
+						: "name";
+		} else if (!this.searchMode && data === "?") {
+			this.helpOpen = !this.helpOpen;
+			if (this.helpOpen) this.detailOpen = false;
 		} else if (!this.searchMode && matchesKey(data, "s")) {
 			this.scope = this.scope === "session" ? "global" : "session";
 			this.savedMessage = `已切换到 ${this.scope} ✓`;
@@ -348,6 +411,18 @@ export class ToolManagerPicker {
 				width - 2,
 			),
 		);
+		if (row.usage) {
+			out.push(
+				truncateToWidth(
+					this.theme.fg(
+						"dim",
+						` used:${row.usage}×${row.usageErrors ? ` · failed:${row.usageErrors}` : ""}` +
+							`${row.lastUsed ? ` · last:${row.lastUsed.slice(0, 10)}` : ""}`,
+					),
+					width - 2,
+				),
+			);
+		}
 		const inner = Math.max(20, width - 10);
 		const description = row.description?.trim() || "(no description)";
 		const descLines = wrapTextWithAnsi(description, inner);
@@ -391,6 +466,24 @@ export class ToolManagerPicker {
 		}
 		while (block.length < DETAIL_HEIGHT) block.push("");
 		return block;
+	}
+
+	/**
+	 * Full keymap, exactly HELP_HEIGHT rows so toggling it does not resize the
+	 * overlay. Rows are truncated rather than wrapped: the key column must stay
+	 * visible even on a narrow terminal.
+	 */
+	private helpBlock(width: number): string[] {
+		const block = [this.theme.fg("dim", truncateToWidth(" keys (? to close)", width - 2))];
+		for (const [keys, action] of KEYMAP) {
+			block.push(
+				truncateToWidth(
+					`${this.theme.fg("accent", keys)}  ${this.theme.fg("dim", action)}`,
+					width - 2,
+				),
+			);
+		}
+		return block.slice(0, HELP_HEIGHT);
 	}
 
 	render(width: number): string[] {
@@ -445,7 +538,15 @@ export class ToolManagerPicker {
 				row.name,
 			);
 			const source = this.theme.fg("dim", ` (${row.plugin ?? row.source})`);
-			lines.push(truncateToWidth(`${cursorMark} ${checkbox} ${name}${source}`, width - 2));
+			const usageLabel = row.usage
+				? this.theme.fg(
+						row.usageErrors ? "warning" : "dim",
+						` (${row.usage}${row.usageErrors ? `/${row.usageErrors}✗` : ""})`,
+					)
+				: "";
+			lines.push(
+				truncateToWidth(`${cursorMark} ${checkbox} ${name}${source}${usageLabel}`, width - 2),
+			);
 		}
 		// Pad the row area to a fixed height so filtering/searching never
 		// collapses the overlay (constant height = stable TUI experience).
@@ -457,12 +558,16 @@ export class ToolManagerPicker {
 			lines.push(...this.detailBlock(rows[this.cursor], width));
 		}
 
+		if (this.helpOpen) {
+			lines.push(...this.helpBlock(width));
+		}
+
 		lines.push("");
 		lines.push(
 			this.theme.fg(
 				"dim",
 				truncateToWidth(
-					" ↑↓ move · space toggle · a shown · / name · p plugin · d detail · f view · s scope · ^s save · esc close",
+					" ↑↓ move · space toggle · ^s save · esc close · ? help",
 					width - 2,
 				),
 			),
@@ -486,6 +591,15 @@ export default function toolManager(pi: ExtensionAPI) {
 	// decision handler to stop one stale warmer cycle.
 	let warmStale = false;
 
+	// Usage accounting runs in every mode. A call blocked by the selection never
+	// executes, so it carries no durationMs and is skipped here on purpose.
+	const usageRecorder = createUsageRecorder();
+	pi.on("tool_execution_end", (event) => {
+		if (typeof event.durationMs !== "number") return;
+		usageRecorder.record(event.toolName, event.isError === true);
+	});
+	pi.on("turn_end", () => usageRecorder.flush());
+
 	const effectiveDisabled = (): Set<string> | undefined =>
 		sessionDisabled ?? globalDisabled;
 
@@ -508,6 +622,8 @@ export default function toolManager(pi: ExtensionAPI) {
 	};
 
 	pi.on("session_start", async (_event, ctx) => {
+		// Pre-0.2 config sat next to this extension's data; move it once.
+		migrateLegacyConfig();
 		tuiActive = ctx.mode === "tui";
 		if (!tuiActive) return;
 		runtimeBaseline ??= [...pi.getActiveTools()];
@@ -591,6 +707,7 @@ export default function toolManager(pi: ExtensionAPI) {
 	});
 
 	pi.on("session_shutdown", async () => {
+		usageRecorder.flush();
 		tuiActive = false;
 		runtimeBaseline = undefined;
 		sessionDisabled = undefined;
@@ -620,8 +737,29 @@ export default function toolManager(pi: ExtensionAPI) {
 		enforce(ctx);
 		warmStale = true;
 	};
+	/** `/tools usage` — merged table; `/tools usage clear [all]` — delete files. */
+	const handleUsage = (ctx: ExtensionCommandContext, rest: string): void => {
+		if (rest === "clear" || rest === "clear all") {
+			const all = rest === "clear all";
+			const removed = clearUsage(deviceName(), DATA_DIR, all);
+			ctx.ui.notify(
+				removed > 0
+					? `已删除 ${removed} 个用量文件（${all ? "全部设备" : "本设备"}）`
+					: "没有可删除的用量文件",
+				"info",
+			);
+			return;
+		}
+		if (rest) {
+			ctx.ui.notify(`未知参数 "${rest}"。用法：/tools usage [clear [all]]`, "warning");
+			return;
+		}
+		ctx.ui.notify(formatUsageTable(readMergedUsage()).join("\n"), "info");
+	};
+
 	pi.registerCommand("tools", {
-		description: "Interactively enable/disable tools (/tools, /tools clear [global])",
+		description:
+			"Interactively enable/disable tools (/tools, /tools clear [global], /tools usage)",
 		getArgumentCompletions: (argumentPrefix: string) => {
 			const p = argumentPrefix.trim().toLowerCase();
 			const items = [
@@ -635,16 +773,35 @@ export default function toolManager(pi: ExtensionAPI) {
 					label: "clear global",
 					description: "Clear the global selection (delete the config file)",
 				},
+				{
+					value: "usage",
+					label: "usage",
+					description: "Show merged tool usage across devices",
+				},
+				{
+					value: "usage clear",
+					label: "usage clear",
+					description: "Delete this device's usage file",
+				},
+				{
+					value: "usage clear all",
+					label: "usage clear all",
+					description: "Delete every device's usage file",
+				},
 			];
 			const filtered = items.filter((item) => item.value.startsWith(p));
 			return filtered.length > 0 ? filtered : null;
 		},
 		handler: async (args: string, ctx: ExtensionCommandContext) => {
 			const trimmed = args.trim().toLowerCase();
+			if (trimmed === "usage" || trimmed.startsWith("usage ")) {
+				handleUsage(ctx, trimmed.slice("usage".length).trim());
+				return;
+			}
 			const isClearGlobal = trimmed === "clear global";
 			const isClear = trimmed === "clear" || isClearGlobal;
 			if (trimmed && !isClear) {
-				ctx.ui.notify(`Unknown argument "${trimmed}". Usage: /tools [clear [global]]`, "warning");
+				ctx.ui.notify(`Unknown argument "${trimmed}". Usage: /tools [clear [global] | usage [clear [all]]]`, "warning");
 				return;
 			}
 
@@ -678,6 +835,15 @@ export default function toolManager(pi: ExtensionAPI) {
 					exposure: tool.exposure,
 				}))
 				.sort((a, b) => a.name.localeCompare(b.name));
+			// Usage is a merged view over every device file, read once per open.
+			const usage = readMergedUsage();
+			for (const row of rows) {
+				const entry = usage.get(row.name);
+				if (!entry) continue;
+				row.usage = entry.count;
+				row.usageErrors = entry.errors;
+				row.lastUsed = entry.lastUsed;
+			}
 			// Per-scope initial checkbox state. The global view falls back to the
 			// runtime baseline (not the live active list, which session
 			// enforcement has already trimmed) so session state never leaks
