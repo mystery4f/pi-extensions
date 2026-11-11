@@ -2,7 +2,8 @@
  * Tool Toggle — minimal interactive enable/disable manager for Pi tools.
  *
  * Provides a single `/tools` command that opens a TUI checkbox list of every
- * available tool ("/" enters a substring search). Toggling tools off blocks
+ * available tool ("/" searches by tool name, "p" by plugin name, "d" shows
+ * description + parameters). Toggling tools off blocks
  * them for the rest of the session (they disappear from the model's tool list
  * and calls are rejected), and the disabled names can be persisted.
  *
@@ -28,8 +29,8 @@
  * Pi's idle cache warmer so the stale pre-change request is not re-sent.
  *
  * Deliberately minimal: no fuzzy search, no sort keywords, no per-model
- * configs — just the list, the checkboxes, a substring search, and the scopes
- * above.
+ * configs — just the list, the checkboxes, two search targets (tool name /
+ * plugin name), a detail panel, and the scopes above.
  *
  * @author mystery4f
  */
@@ -37,7 +38,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
+import { matchesKey, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import type {
 	ExtensionAPI,
 	ExtensionCommandContext,
@@ -48,6 +49,9 @@ import type {
 const CUSTOM_TYPE = "tool-toggle-config";
 const GLOBAL_FILE = path.join(os.homedir(), ".pi", "agent", "tool-toggle.json");
 const MAX_VISIBLE_ROWS = 15;
+const MAX_DETAIL_PARAMS = 12;
+/** Fixed rendered height of the detail panel: bigger content is truncated. */
+const DETAIL_HEIGHT = 14;
 
 type ToolsState = { disabledTools?: string[]; enabledTools?: string[] };
 
@@ -56,6 +60,29 @@ type ToolRow = {
 	source: string;
 	description: string;
 	plugin?: string;
+	/** Raw JSON Schema for the tool's parameters, used by the detail panel. */
+	parameters?: unknown;
+	exposure?: string;
+};
+
+/** One parameter row rendered by the detail panel. */
+type ParamRow = {
+	name: string;
+	type: string;
+	required: boolean;
+	description: string;
+};
+
+type JsonSchema = {
+	type?: string | string[];
+	description?: string;
+	enum?: unknown[];
+	properties?: Record<string, JsonSchema>;
+	items?: JsonSchema;
+	required?: string[];
+	anyOf?: JsonSchema[];
+	oneOf?: JsonSchema[];
+	$ref?: string;
 };
 
 /** Short label for where a tool comes from (builtin / SDK / extension). */
@@ -100,6 +127,34 @@ function pluginLabel(
 	return undefined;
 }
 
+/** Compact type label for one JSON Schema node (unions, arrays, enums, $ref). */
+function schemaTypeLabel(schema: JsonSchema | undefined): string {
+	if (!schema) return "any";
+	if (typeof schema.$ref === "string") return schema.$ref.split("/").pop() ?? "object";
+	if (schema.anyOf) return schema.anyOf.map(schemaTypeLabel).join(" | ");
+	if (schema.oneOf) return schema.oneOf.map(schemaTypeLabel).join(" | ");
+	if (schema.enum) return `enum(${schema.enum.map(String).join("|")})`;
+	if (Array.isArray(schema.type)) return schema.type.join(" | ");
+	if (schema.type === "array") return `${schemaTypeLabel(schema.items)}[]`;
+	if (schema.type) return schema.type;
+	if (schema.properties) return "object";
+	return "any";
+}
+
+/** Flatten a tool's top-level parameter schema into detail-panel rows. */
+function describeParameters(parameters: unknown): ParamRow[] {
+	const root = parameters as JsonSchema | undefined;
+	const properties = root?.properties;
+	if (!properties) return [];
+	const required = new Set(root?.required ?? []);
+	return Object.entries(properties).map(([name, schema]) => ({
+		name,
+		type: schemaTypeLabel(schema),
+		required: required.has(name),
+		description: schema?.description ?? "",
+	}));
+}
+
 /** Read the global file. Legacy whitelist (`enabledTools`) files are ignored. */
 function loadGlobalState(): { disabled?: Set<string>; legacyEnabled?: Set<string> } {
 	try {
@@ -130,9 +185,11 @@ function deleteGlobalFile(): void {
  * Scrollable checkbox list of all tools.
  *
  * Keys: up/down move, space toggles, a toggles the shown rows, "/" enters
- * search mode (type to filter by tool name, description, or plugin/package
- * name; backspace erases, esc leaves search), f cycles the view filter
- * (all → enabled → disabled), s switches the scope (session ↔ global).
+ * tool-name search, "p" enters plugin-name search (tab swaps the target while
+ * searching; backspace erases, esc leaves search), "d" toggles the detail
+ * panel (full description + parameter list of the highlighted row), f cycles
+ * the view filter (all → enabled → disabled), s switches the scope
+ * (session ↔ global).
  * Each scope keeps its OWN working copy of the checkbox state, so toggles
  * made in one scope are not carried into the other; switching also re-clamps
  * the cursor because the enabled/disabled view filter now keys off the
@@ -148,6 +205,9 @@ export class ToolTogglePicker {
 	private scrollOffset = 0;
 	private readonly checkedByScope: { session: Set<string>; global: Set<string> };
 	private searchMode = false;
+	/** Which field the query filters on: tool name or plugin name. */
+	private searchTarget: "tool" | "plugin" = "tool";
+	private detailOpen = false;
 	private query = "";
 	private savedMessage: string | null = null;
 	private filter: "all" | "enabled" | "disabled" = "all";
@@ -170,19 +230,17 @@ export class ToolTogglePicker {
 		return this.checkedByScope[this.scope];
 	}
 
-	/** Rows after applying the view filter and the search query. */
+	/** Rows after applying the view filter and the current search target. */
 	private visibleRows(): ToolRow[] {
 		let rows = this.rows;
 		if (this.filter === "enabled") rows = rows.filter((row) => this.checked.has(row.name));
 		else if (this.filter === "disabled") rows = rows.filter((row) => !this.checked.has(row.name));
 		if (!this.query) return rows;
 		const q = this.query.toLowerCase();
-		return rows.filter(
-			(row) =>
-				row.name.toLowerCase().includes(q) ||
-				row.description.toLowerCase().includes(q) ||
-				(row.plugin !== undefined && row.plugin.toLowerCase().includes(q)),
-		);
+		if (this.searchTarget === "plugin") {
+			return rows.filter((row) => (row.plugin ?? row.source).toLowerCase().includes(q));
+		}
+		return rows.filter((row) => row.name.toLowerCase().includes(q));
 	}
 
 	handleInput(data: string): void {
@@ -190,6 +248,7 @@ export class ToolTogglePicker {
 		if (matchesKey(data, "escape")) {
 			if (this.searchMode) {
 				this.searchMode = false;
+				this.searchTarget = "tool";
 				this.query = "";
 			} else {
 				this.done(undefined);
@@ -206,10 +265,20 @@ export class ToolTogglePicker {
 			if (this.cursor < this.visibleRows().length - 1) this.cursor++;
 		} else if (matchesKey(data, "space")) {
 			this.toggleCurrent();
+		} else if (this.searchMode && matchesKey(data, "tab")) {
+			this.searchTarget = this.searchTarget === "tool" ? "plugin" : "tool";
 		} else if (this.searchMode && matchesKey(data, "backspace")) {
 			this.query = this.query.slice(0, -1);
 		} else if (!this.searchMode && data === "/") {
 			this.searchMode = true;
+			this.searchTarget = "tool";
+			this.query = "";
+		} else if (!this.searchMode && data === "p") {
+			this.searchMode = true;
+			this.searchTarget = "plugin";
+			this.query = "";
+		} else if (!this.searchMode && data === "d") {
+			this.detailOpen = !this.detailOpen;
 		} else if (!this.searchMode && data === "f") {
 			this.filter =
 				this.filter === "all" ? "enabled" : this.filter === "enabled" ? "disabled" : "all";
@@ -256,6 +325,74 @@ export class ToolTogglePicker {
 		}
 	}
 
+	/**
+	 * Detail block for the highlighted row: full description plus the flattened
+	 * parameter list (name, type, required flag, description). Callers clamp it
+	 * to DETAIL_HEIGHT so the overlay keeps a constant height while the cursor
+	 * moves between rows of different length.
+	 */
+	private detailLines(row: ToolRow | undefined, width: number): string[] {
+		const out: string[] = [];
+		out.push(
+			this.theme.fg("dim", " " + "─".repeat(Math.max(1, width - 3))),
+		);
+		if (!row) {
+			out.push(this.theme.fg("dim", " (no tool selected)"));
+			return out;
+		}
+		const origin = row.plugin ?? row.source;
+		out.push(
+			truncateToWidth(
+				` ${this.theme.fg("accent", this.theme.bold(row.name))}` +
+					this.theme.fg("dim", `  ${origin}${row.exposure ? ` · ${row.exposure}` : ""}`),
+				width - 2,
+			),
+		);
+		const inner = Math.max(20, width - 10);
+		const description = row.description?.trim() || "(no description)";
+		const descLines = wrapTextWithAnsi(description, inner);
+		for (const [index, line] of descLines.entries()) {
+			out.push(this.theme.fg("dim", ` ${index === 0 ? "desc:" : "     "} ${line}`));
+		}
+		const params = describeParameters(row.parameters);
+		if (params.length === 0) {
+			out.push(this.theme.fg("dim", " params: (none)"));
+			return out;
+		}
+		out.push(this.theme.fg("dim", ` params (${params.length}) — * required:`));
+		for (const param of params.slice(0, MAX_DETAIL_PARAMS)) {
+			const head = `${param.name}${param.required ? "*" : ""}  ${param.type}`;
+			out.push(truncateToWidth(`  ${this.theme.fg("accent", head)}`, width - 2));
+			if (param.description) {
+				for (const line of wrapTextWithAnsi(param.description, inner).slice(0, 2)) {
+					out.push(this.theme.fg("dim", `      ${line}`));
+				}
+			}
+		}
+		if (params.length > MAX_DETAIL_PARAMS) {
+			out.push(this.theme.fg("dim", `  … +${params.length - MAX_DETAIL_PARAMS} more`));
+		}
+		return out;
+	}
+
+	/**
+	 * detailLines clamped to exactly DETAIL_HEIGHT rows: shorter content is
+	 * padded with blanks, longer content ends with a truncation marker. This is
+	 * what keeps the overlay from resizing as the cursor moves.
+	 */
+	private detailBlock(row: ToolRow | undefined, width: number): string[] {
+		const detail = this.detailLines(row, width);
+		const block = detail.slice(0, DETAIL_HEIGHT);
+		if (detail.length > DETAIL_HEIGHT) {
+			block[DETAIL_HEIGHT - 1] = this.theme.fg(
+				"dim",
+				truncateToWidth(` … +${detail.length - DETAIL_HEIGHT + 1} more line(s)`, width - 2),
+			);
+		}
+		while (block.length < DETAIL_HEIGHT) block.push("");
+		return block;
+	}
+
 	render(width: number): string[] {
 		const rows = this.visibleRows();
 		const visible = rows.slice(this.scrollOffset, this.scrollOffset + MAX_VISIBLE_ROWS);
@@ -274,7 +411,10 @@ export class ToolTogglePicker {
 		if (this.savedMessage) {
 			status += this.theme.fg("success", `  ${this.savedMessage}`);
 		} else if (this.query) {
-			status += this.theme.fg("dim", `  (${rows.length}/${this.rows.length} match)`);
+			status += this.theme.fg(
+				"dim",
+				`  search:${this.searchTarget} (${rows.length}/${this.rows.length} match)`,
+			);
 		} else if (visible.length > 0 && this.rows.length > MAX_VISIBLE_ROWS) {
 			status += this.theme.fg(
 				"dim",
@@ -283,7 +423,12 @@ export class ToolTogglePicker {
 		}
 		lines.push(status);
 		if (this.searchMode) {
-			lines.push(this.theme.fg("accent", ` / ${this.query}█  (esc exits search)`));
+			lines.push(
+				this.theme.fg(
+					"accent",
+					` /[${this.searchTarget}] ${this.query}█  (tab switches target · esc exits)`,
+				),
+			);
 		} else {
 			// Reserve the search line slot so the overlay height never changes.
 			lines.push("");
@@ -308,12 +453,16 @@ export class ToolTogglePicker {
 			lines.push("");
 		}
 
+		if (this.detailOpen) {
+			lines.push(...this.detailBlock(rows[this.cursor], width));
+		}
+
 		lines.push("");
 		lines.push(
 			this.theme.fg(
 				"dim",
 				truncateToWidth(
-					" up/down move · space toggle · a toggle shown · / search · f view · s scope · ctrl+s save · esc close",
+					" ↑↓ move · space toggle · a shown · / name · p plugin · d detail · f view · s scope · ^s save · esc close",
 					width - 2,
 				),
 			),
@@ -525,6 +674,8 @@ export default function toolToggle(pi: ExtensionAPI) {
 					source: toolSourceLabel(tool),
 					description: tool.description ?? "",
 					plugin: pluginLabel(tool.sourceInfo),
+					parameters: tool.parameters,
+					exposure: tool.exposure,
 				}))
 				.sort((a, b) => a.name.localeCompare(b.name));
 			// Per-scope initial checkbox state. The global view falls back to the
