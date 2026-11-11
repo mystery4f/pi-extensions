@@ -79,7 +79,8 @@ const KEYMAP: readonly HelpSection[] = [
 		title: "navigate",
 		entries: [
 			["↑ / ↓", "previous / next row"],
-			["home / end", "first / last row"],
+			["ctrl+home", "first row"],
+			["ctrl+end", "last row"],
 			["PgUp / PgDn", "one screen at a time"],
 		],
 	},
@@ -353,9 +354,9 @@ export class ToolManagerPicker {
 			if (this.cursor > 0) this.cursor--;
 		} else if (matchesKey(data, "down")) {
 			if (this.cursor < this.visibleRows().length - 1) this.cursor++;
-		} else if (matchesKey(data, "home")) {
+		} else if (matchesKey(data, "ctrl+home")) {
 			this.cursor = 0;
-		} else if (matchesKey(data, "end")) {
+		} else if (matchesKey(data, "ctrl+end")) {
 			this.cursor = Math.max(0, this.visibleRows().length - 1);
 		} else if (matchesKey(data, "pageUp")) {
 			this.cursor = Math.max(0, this.cursor - MAX_VISIBLE_ROWS);
