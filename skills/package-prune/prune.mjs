@@ -66,7 +66,7 @@ if (npmOrphans.length === 0) {
     writeFileSync(npmPkgPath, JSON.stringify(npmPkg, null, 2) + "\n");
     console.log(`backup written: ${backup}`);
     console.log("running npm prune...");
-    const r = spawnSync("npm", ["prune", "--no-audit", "--no-fund"], { cwd: npmDir, stdio: "inherit", shell: true });
+    const r = spawnSync("npm", ["prune", "--omit=dev", "--legacy-peer-deps", "--no-audit", "--no-fund"], { cwd: npmDir, stdio: "inherit", shell: true });
     if (r.status !== 0) {
       writeFileSync(npmPkgPath, readFileSync(backup));
       console.error(`npm prune failed (exit ${r.status}); package.json restored from backup`);
