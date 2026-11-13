@@ -2,7 +2,7 @@
  * Tool Toggle — minimal interactive enable/disable manager for Pi tools.
  *
  * Provides a single `/tools` command that opens a TUI checkbox list of every
- * available tool ("/" searches by tool name, "p" by plugin name, "d" shows
+ * available tool ("/" searches by tool name, "p" by plugin name, alt+d shows
  * description + parameters). Toggling tools off blocks
  * them for the rest of the session (they disappear from the model's tool list
  * and calls are rejected), and the disabled names can be persisted.
@@ -102,7 +102,7 @@ const KEYMAP: readonly HelpSection[] = [
 	{
 		title: "view",
 		entries: [
-			["d", "detail panel (closes this keymap)"],
+			["alt+d", "detail panel (works in search too)"],
 			["f", "filter: all -> enabled -> disabled"],
 			["s", "scope: session -> global"],
 			["o", "sort: name -> count desc -> count asc"],
@@ -265,7 +265,7 @@ function deleteGlobalFile(): void {
  *
  * Keys: up/down move, space toggles, a toggles the shown rows, "/" enters
  * tool-name search, "p" enters plugin-name search (tab swaps the target while
- * searching; backspace erases, esc leaves search), "d" toggles the detail
+ * searching; backspace erases, esc leaves search), alt+d toggles the detail
  * panel (full description + parameter list of the highlighted row), f cycles
  * the view filter (all → enabled → disabled), s switches the scope
  * (session ↔ global).
@@ -392,7 +392,9 @@ export class ToolManagerPicker {
 			this.searchMode = true;
 			this.searchTarget = "plugin";
 			this.query = "";
-		} else if (!this.searchMode && data === "d") {
+		} else if (matchesKey(data, "alt+d")) {
+			// alt+d (instead of plain "d") so typing "d" inside search stays text;
+			// the key is intentionally allowed while searching.
 			// Detail and keymap share the space under the list: opening one closes
 			// the other, otherwise the overlay outgrows a normal terminal.
 			this.detailOpen = !this.detailOpen;
