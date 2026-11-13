@@ -2,8 +2,9 @@
  * Tool Toggle — minimal interactive enable/disable manager for Pi tools.
  *
  * Provides a single `/tools` command that opens a TUI checkbox list of every
- * available tool ("/" searches by tool name, "p" by plugin name, alt+d shows
- * description + parameters). Toggling tools off blocks
+ * available tool ("/" searches by tool name, "p" by plugin name, and the query
+ * accepts pasted text; "d" / alt+d shows a scrollable description + parameters).
+ * Toggling tools off blocks
  * them for the rest of the session (they disappear from the model's tool list
  * and calls are rejected), and the disabled names can be persisted.
  *
@@ -62,9 +63,14 @@ import type {
 
 const CUSTOM_TYPE = "tool-manager-config";
 const MAX_VISIBLE_ROWS = 15;
-const MAX_DETAIL_PARAMS = 12;
-/** Fixed rendered height of the detail panel: bigger content is truncated. */
+/**
+ * Fixed number of content rows in the detail panel viewport. Longer content is
+ * reached with the scroll keys instead of being truncated away.
+ */
 const DETAIL_HEIGHT = 14;
+/** Bracketed-paste markers wrapped around pasted text by the terminal layer. */
+const PASTE_START = "\x1b[200~";
+const PASTE_END = "\x1b[201~";
 /** One keymap line: the key label and what it does. */
 type HelpEntry = readonly [keys: string, action: string];
 /** A named group of bindings; groups are what the keymap panel lays out. */
@@ -78,10 +84,11 @@ const KEYMAP: readonly HelpSection[] = [
 	{
 		title: "navigate",
 		entries: [
-			["↑ / ↓", "previous / next row"],
-			["ctrl+home", "first row"],
-			["ctrl+end", "last row"],
-			["PgUp / PgDn", "one screen at a time"],
+			["↑ / ↓", "previous / next row (scrolls detail when open)"],
+			["alt+↑ / alt+↓", "row, while the detail panel is open"],
+			["ctrl+home", "first row (detail: top)"],
+			["ctrl+end", "last row (detail: end)"],
+			["PgUp / PgDn", "one screen (detail: one screen)"],
 		],
 	},
 	{
@@ -102,7 +109,7 @@ const KEYMAP: readonly HelpSection[] = [
 	{
 		title: "view",
 		entries: [
-			["alt+d", "detail panel (works in search too)"],
+			["d / alt+d", "detail panel (alt+d works in search too)"],
 			["f", "filter: all -> enabled -> disabled"],
 			["s", "scope: session -> global"],
 			["o", "sort: name -> count desc -> count asc"],
@@ -287,6 +294,12 @@ export class ToolManagerPicker {
 	/** Which field the query filters on: tool name or plugin name. */
 	private searchTarget: "tool" | "plugin" = "tool";
 	private detailOpen = false;
+	/** Vertical scroll offset inside the detail panel; reset when the row changes. */
+	private detailScroll = 0;
+	/** Content rows of the last rendered detail panel, used to clamp scrolling. */
+	private detailLineCount = 0;
+	/** Bracketed-paste accumulator: pi may deliver one paste in several chunks. */
+	private pasteBuffer: string | null = null;
 	/** Keymap panel opened by "?"; the footer only has room for the core keys. */
 	private helpOpen = false;
 	private query = "";
@@ -334,6 +347,8 @@ export class ToolManagerPicker {
 	}
 
 	handleInput(data: string): void {
+		if (this.consumePaste(data)) return;
+		const cursorBefore = this.cursor;
 		this.savedMessage = null;
 		if (matchesKey(data, "escape")) {
 			if (this.helpOpen) {
@@ -366,18 +381,30 @@ export class ToolManagerPicker {
 				this.onSave(this.scope, new Set(this.checked));
 				this.savedMessage = `保存成功 ✓ (${this.checked.size} enabled)`;
 			}
-		} else if (matchesKey(data, "up")) {
+		} else if (matchesKey(data, "alt+up")) {
+			// Arrows scroll the open detail panel, so the row cursor moves on
+			// alt+arrows while it is open (plain arrows when it is closed).
 			if (this.cursor > 0) this.cursor--;
-		} else if (matchesKey(data, "down")) {
+		} else if (matchesKey(data, "alt+down")) {
 			if (this.cursor < this.visibleRows().length - 1) this.cursor++;
+		} else if (matchesKey(data, "up")) {
+			if (this.detailOpen) this.scrollDetail(-1);
+			else if (this.cursor > 0) this.cursor--;
+		} else if (matchesKey(data, "down")) {
+			if (this.detailOpen) this.scrollDetail(1);
+			else if (this.cursor < this.visibleRows().length - 1) this.cursor++;
 		} else if (matchesKey(data, "ctrl+home")) {
-			this.cursor = 0;
+			if (this.detailOpen) this.detailScroll = 0;
+			else this.cursor = 0;
 		} else if (matchesKey(data, "ctrl+end")) {
-			this.cursor = Math.max(0, this.visibleRows().length - 1);
+			if (this.detailOpen) this.scrollDetail(Number.MAX_SAFE_INTEGER);
+			else this.cursor = Math.max(0, this.visibleRows().length - 1);
 		} else if (matchesKey(data, "pageUp")) {
-			this.cursor = Math.max(0, this.cursor - MAX_VISIBLE_ROWS);
+			if (this.detailOpen) this.scrollDetail(-DETAIL_HEIGHT);
+			else this.cursor = Math.max(0, this.cursor - MAX_VISIBLE_ROWS);
 		} else if (matchesKey(data, "pageDown")) {
-			this.cursor = Math.min(this.visibleRows().length - 1, this.cursor + MAX_VISIBLE_ROWS);
+			if (this.detailOpen) this.scrollDetail(DETAIL_HEIGHT);
+			else this.cursor = Math.min(this.visibleRows().length - 1, this.cursor + MAX_VISIBLE_ROWS);
 		} else if (matchesKey(data, "space")) {
 			this.toggleCurrent();
 		} else if (this.searchMode && matchesKey(data, "tab")) {
@@ -392,12 +419,13 @@ export class ToolManagerPicker {
 			this.searchMode = true;
 			this.searchTarget = "plugin";
 			this.query = "";
-		} else if (matchesKey(data, "alt+d")) {
-			// alt+d (instead of plain "d") so typing "d" inside search stays text;
-			// the key is intentionally allowed while searching.
+		} else if (matchesKey(data, "alt+d") || (!this.searchMode && data === "d")) {
+			// Plain "d" opens the panel from the list; alt+d is the spelling that
+			// also works while searching, where "d" must stay query text.
 			// Detail and keymap share the space under the list: opening one closes
 			// the other, otherwise the overlay outgrows a normal terminal.
 			this.detailOpen = !this.detailOpen;
+			this.detailScroll = 0;
 			if (this.detailOpen) this.helpOpen = false;
 		} else if (!this.searchMode && data === "f") {
 			this.filter =
@@ -436,6 +464,47 @@ export class ToolManagerPicker {
 		const kept = rows.findIndex((row) => row.name === before);
 		if (kept >= 0) this.cursor = kept;
 		this.clampScroll();
+		// The detail panel belongs to one row: a new row starts at its top.
+		if (this.cursor !== cursorBefore) this.detailScroll = 0;
+	}
+
+	/**
+	 * Bracketed paste arrives as ESC[200~ … ESC[201~ and may be split over
+	 * several chunks. The picker has a single-line query field, so the payload
+	 * is flattened to one line and appended to the query — searching for a
+	 * pasted name is the only useful thing a paste can do here. Returns true
+	 * when the input was paste content and normal key handling must be skipped.
+	 */
+	private consumePaste(data: string): boolean {
+		if (this.pasteBuffer === null && !data.includes(PASTE_START)) return false;
+		this.pasteBuffer = (this.pasteBuffer ?? "") + data.split(PASTE_START).join("");
+		const end = this.pasteBuffer.indexOf(PASTE_END);
+		if (end < 0) return true;
+		const payload = this.pasteBuffer.slice(0, end);
+		const rest = this.pasteBuffer.slice(end + PASTE_END.length);
+		this.pasteBuffer = null;
+		const text = payload.replace(/[\u0000-\u001f\u007f]+/g, " ").trim();
+		if (text) {
+			if (!this.searchMode) {
+				this.searchMode = true;
+				this.searchTarget = "tool";
+				this.query = "";
+			}
+			this.query += text;
+			this.savedMessage = null;
+			this.cursor = 0;
+			this.scrollOffset = 0;
+			this.detailScroll = 0;
+		}
+		// Anything typed after the closing marker is handled normally.
+		if (rest) this.handleInput(rest);
+		return true;
+	}
+
+	/** Move the detail viewport by delta rows, clamped to the rendered content. */
+	private scrollDetail(delta: number): void {
+		const max = Math.max(0, this.detailLineCount - DETAIL_HEIGHT);
+		this.detailScroll = Math.min(max, Math.max(0, this.detailScroll + delta));
 	}
 
 	private toggleCurrent(): void {
@@ -502,7 +571,7 @@ export class ToolManagerPicker {
 			return out;
 		}
 		out.push(this.theme.fg("dim", ` params (${params.length}) — * required:`));
-		for (const param of params.slice(0, MAX_DETAIL_PARAMS)) {
+		for (const param of params) {
 			const head = `${param.name}${param.required ? "*" : ""}  ${param.type}`;
 			out.push(truncateToWidth(`  ${this.theme.fg("accent", head)}`, width - 2));
 			if (param.description) {
@@ -511,27 +580,28 @@ export class ToolManagerPicker {
 				}
 			}
 		}
-		if (params.length > MAX_DETAIL_PARAMS) {
-			out.push(this.theme.fg("dim", `  … +${params.length - MAX_DETAIL_PARAMS} more`));
-		}
 		return out;
 	}
 
 	/**
-	 * detailLines clamped to exactly DETAIL_HEIGHT rows: shorter content is
-	 * padded with blanks, longer content ends with a truncation marker. This is
-	 * what keeps the overlay from resizing as the cursor moves.
+	 * detailLines windowed to exactly DETAIL_HEIGHT content rows plus one fixed
+	 * hint row: taller content scrolls instead of being lost, and the height stays
+	 * constant so the overlay does not resize as the cursor or scroll changes.
 	 */
 	private detailBlock(row: ToolRow | undefined, width: number): string[] {
 		const detail = this.detailLines(row, width);
-		const block = detail.slice(0, DETAIL_HEIGHT);
-		if (detail.length > DETAIL_HEIGHT) {
-			block[DETAIL_HEIGHT - 1] = this.theme.fg(
-				"dim",
-				truncateToWidth(` … +${detail.length - DETAIL_HEIGHT + 1} more line(s)`, width - 2),
-			);
-		}
+		this.detailLineCount = detail.length;
+		const overflow = detail.length > DETAIL_HEIGHT;
+		const maxScroll = Math.max(0, detail.length - DETAIL_HEIGHT);
+		this.detailScroll = Math.min(maxScroll, Math.max(0, this.detailScroll));
+		const start = overflow ? this.detailScroll : 0;
+		const block = detail.slice(start, start + DETAIL_HEIGHT);
 		while (block.length < DETAIL_HEIGHT) block.push("");
+		const hint =
+			overflow && this.detailOpen
+				? ` lines ${start + 1}-${start + block.length}/${detail.length} · ↑↓ / PgUp / PgDn scroll`
+				: " alt+d closes";
+		block.push(this.theme.fg("dim", truncateToWidth(hint, width - 2)));
 		return block;
 	}
 
@@ -655,7 +725,7 @@ export class ToolManagerPicker {
 			this.theme.fg(
 				"dim",
 				truncateToWidth(
-					" ↑↓ move · space toggle · ^s save · esc / alt+q close · ? help",
+					" ↑↓ move · space toggle · d detail · ^s save · esc / alt+q close · ? help",
 					width - 2,
 				),
 			),
