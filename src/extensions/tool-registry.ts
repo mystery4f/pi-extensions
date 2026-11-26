@@ -161,7 +161,7 @@ function makeRegistryTool(listTools: () => ToolInfo[]) {
 			"To see every tool a plugin ships, call `registry` with plugin=npm:<pkg> or plugin=git:<owner>/<repo>.",
 		],
 
-		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+		async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
 			const all = listTools();
 			const index = buildIndex(all);
 			const lines: string[] = [];

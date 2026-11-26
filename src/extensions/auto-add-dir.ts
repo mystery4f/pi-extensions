@@ -36,6 +36,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { Text } from "@earendil-works/pi-tui";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { isJsonObject, readSettings, writeSettings, type JsonObject } from "./settings-store.js";
 
 // ── 日志 ───────────────────────────────────────────────────────
 const LOG_FILE = path.join(process.env.TEMP || process.env.TMP || "/tmp", "auto-add-dir.log");
@@ -145,6 +146,25 @@ interface ResolvedConfig {
 	rules: ResolvedRule[];
 }
 
+/** Narrow the `autoAddDir` value: malformed rules are dropped rather than trusted. */
+function parseConfig(raw: unknown): Config | undefined {
+	if (!isJsonObject(raw)) return undefined;
+	const rules: Rule[] = [];
+	if (Array.isArray(raw.rules)) {
+		for (const item of raw.rules) {
+			if (!isJsonObject(item) || typeof item.dir !== "string") continue;
+			rules.push({
+				dir: item.dir,
+				description: typeof item.description === "string" ? item.description : "",
+				keywords: Array.isArray(item.keywords)
+					? item.keywords.filter((k): k is string => typeof k === "string")
+					: undefined,
+			});
+		}
+	}
+	return { basePath: typeof raw.basePath === "string" ? raw.basePath : undefined, rules };
+}
+
 function parseRulesFromSettings(
 	settingsPath: string,
 	envJson: Record<string, string>,
@@ -157,10 +177,14 @@ function parseRulesFromSettings(
 			return [];
 		}
 
-		const settings = JSON.parse(fs.readFileSync(settingsPath, "utf-8")) as Record<string, any>;
+		const settings = readSettings(settingsPath);
+		if (settings === null) {
+			log(`loadConfig: FAILED to parse ${settingsPath}`);
+			return [];
+		}
 
-		const cfg = settings.autoAddDir as Config | undefined;
-		if (!cfg || !cfg.rules || cfg.rules.length === 0) {
+		const cfg = parseConfig(settings.autoAddDir);
+		if (!cfg || cfg.rules.length === 0) {
 			return [];
 		}
 
@@ -199,14 +223,14 @@ function loadConfig(cwd?: string): ResolvedConfig {
 
 	let globalBasePath: string | undefined;
 	try {
-		if (fs.existsSync(SETTINGS_PATH)) {
-			const settings = JSON.parse(fs.readFileSync(SETTINGS_PATH, "utf-8")) as Record<string, any>;
-			const cfg = settings.autoAddDir as Config | undefined;
-			if (cfg?.basePath) {
-				globalBasePath = resolveDir(cfg.basePath, envJson)?.dir;
-			}
+		const settings = readSettings(SETTINGS_PATH);
+		const cfg = settings === null ? undefined : parseConfig(settings.autoAddDir);
+		if (cfg?.basePath) {
+			globalBasePath = resolveDir(cfg.basePath, envJson)?.dir;
 		}
-	} catch {}
+	} catch (e) {
+		log(`loadConfig: basePath resolution failed — ${e}`);
+	}
 
 	let projectRules: ResolvedRule[] = [];
 	if (cwd) {
@@ -227,76 +251,57 @@ function loadConfig(cwd?: string): ResolvedConfig {
 
 // ── Config 写入 ──
 
-function saveRuleToSettings(settingsPath: string, rule: Rule): boolean {
-	let settings: Record<string, any> = {};
+/** The `autoAddDir` object a write mutates, created in place when missing or malformed. */
+function ensureConfig(settings: JsonObject): { rules: unknown[] } {
+	const existing = settings.autoAddDir;
+	const raw: JsonObject = isJsonObject(existing) ? existing : {};
+	if (raw !== existing) settings.autoAddDir = raw;
+	if (!Array.isArray(raw.rules)) raw.rules = [];
+	return raw as { rules: unknown[] };
+}
 
-	if (fs.existsSync(settingsPath)) {
-		try {
-			settings = JSON.parse(fs.readFileSync(settingsPath, "utf-8"));
-		} catch (e) {
-			log(`saveRule: FAILED to parse existing ${settingsPath} — ${e}`);
-			return false;
-		}
+export function saveRuleToSettings(settingsPath: string, rule: Rule): boolean {
+	const settings = readSettings(settingsPath);
+	if (settings === null) {
+		log(`saveRule: FAILED to parse existing ${settingsPath}`);
+		return false;
 	}
 
-	if (!settings.autoAddDir) settings.autoAddDir = {};
-	if (!Array.isArray(settings.autoAddDir.rules)) settings.autoAddDir.rules = [];
-
-	const idx = settings.autoAddDir.rules.findIndex((r: any) => r.dir === rule.dir);
+	const config = ensureConfig(settings);
+	const idx = config.rules.findIndex((item) => isJsonObject(item) && item.dir === rule.dir);
 	if (idx >= 0) {
-		settings.autoAddDir.rules[idx] = rule;
+		config.rules[idx] = rule;
 		log(`saveRule: updated existing rule for "${rule.dir}"`);
 	} else {
-		settings.autoAddDir.rules.push(rule);
+		config.rules.push(rule);
 		log(`saveRule: added new rule for "${rule.dir}"`);
 	}
 
-	const dir = path.dirname(settingsPath);
-	if (!fs.existsSync(dir)) {
-		try {
-			fs.mkdirSync(dir, { recursive: true });
-		} catch (e) {
-			log(`saveRule: FAILED to create dir "${dir}" — ${e}`);
-			return false;
-		}
-	}
-
-	try {
-		fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), "utf-8");
-		log(`saveRule: wrote to ${settingsPath}`);
-		return true;
-	} catch (e) {
-		log(`saveRule: FAILED to write ${settingsPath} — ${e}`);
+	if (!writeSettings(settingsPath, settings)) {
+		log(`saveRule: FAILED to write ${settingsPath}`);
 		return false;
 	}
+	log(`saveRule: wrote to ${settingsPath}`);
+	return true;
 }
 
-function removeRuleFromSettings(settingsPath: string, dirSource: string): boolean {
-	if (!fs.existsSync(settingsPath)) return false;
+export function removeRuleFromSettings(settingsPath: string, dirSource: string): boolean {
+	const settings = readSettings(settingsPath);
+	if (settings === null) return false;
 
-	let settings: Record<string, any>;
-	try {
-		settings = JSON.parse(fs.readFileSync(settingsPath, "utf-8"));
-	} catch {
+	const raw = settings.autoAddDir;
+	if (!isJsonObject(raw) || !Array.isArray(raw.rules)) return false;
+
+	const kept = raw.rules.filter((item) => !(isJsonObject(item) && item.dir === dirSource));
+	if (kept.length === raw.rules.length) return false;
+	raw.rules = kept;
+
+	if (!writeSettings(settingsPath, settings)) {
+		log(`removeRule: FAILED to write ${settingsPath}`);
 		return false;
 	}
-
-	const rules = settings.autoAddDir?.rules;
-	if (!Array.isArray(rules)) return false;
-
-	const before = rules.length;
-	settings.autoAddDir.rules = rules.filter((r: any) => r.dir !== dirSource);
-
-	if (settings.autoAddDir.rules.length === before) return false;
-
-	try {
-		fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), "utf-8");
-		log(`removeRule: removed "${dirSource}" from ${settingsPath}`);
-		return true;
-	} catch (e) {
-		log(`removeRule: FAILED to write ${settingsPath} — ${e}`);
-		return false;
-	}
+	log(`removeRule: removed "${dirSource}" from ${settingsPath}`);
+	return true;
 }
 
 // ═══════════════════════════════════════════════════════════════

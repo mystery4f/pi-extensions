@@ -69,6 +69,7 @@ import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-c
 
 import { hostFileOf, parseHostRules, resolveHostCodes } from "./host-rules.js";
 import { deviceName } from "./tool-manager-usage.js";
+import { isJsonObject, readSettings, writeSettings, type JsonObject } from "./settings-store.js";
 // ── 路径常量 ─────────────────────────────────────────────────────
 
 const AGENT_DIR = path.join(os.homedir(), ".pi", "agent");
@@ -102,15 +103,7 @@ interface ConfiguredEntry {
 
 // ── 读取 ───────────────────────────────────────────────────────
 
-function readJSON(filePath: string): Record<string, unknown> | null {
-	try {
-		return JSON.parse(fs.readFileSync(filePath, "utf-8"));
-	} catch {
-		return null;
-	}
-}
-
-function getExtraContext(raw: Record<string, unknown> | null): ExtraContextConfig {
+function getExtraContext(raw: JsonObject | null): ExtraContextConfig {
 	if (!raw || typeof raw.extraContext !== "object" || !raw.extraContext) return {};
 	return raw.extraContext as ExtraContextConfig;
 }
@@ -159,7 +152,7 @@ function loadFromSettings(
 	includes?: Set<string>,
 ): ExtraFile[] {
 	const results: ExtraFile[] = [];
-	const raw = readJSON(settingsPath);
+	const raw = readSettings(settingsPath);
 	const ctx = getExtraContext(raw);
 	if (!Array.isArray(ctx.files)) return results;
 
@@ -230,7 +223,7 @@ function collectExtraFiles(cwd: string): ContextSnapshot {
 
 	// Read project includes first (needed to filter global files)
 	const projectSettingsPath = path.join(cwd, ".pi", "settings.json");
-	const projectRaw = readJSON(projectSettingsPath);
+	const projectRaw = readSettings(projectSettingsPath);
 	const projectCtx = getExtraContext(projectRaw);
 	const includes = new Set<string>(Array.isArray(projectCtx.includes) ? projectCtx.includes : []);
 
@@ -241,7 +234,7 @@ function collectExtraFiles(cwd: string): ContextSnapshot {
 	}
 
 	// 2. Host rules: ~/.pi/agent/AGENTS-<code>.md for every code this machine carries
-	const host = loadHostFiles(readJSON(SETTINGS_PATH), AGENT_DIR, seen);
+	const host = loadHostFiles(readSettings(SETTINGS_PATH), AGENT_DIR, seen);
 	results.push(...host.files);
 	missingHostCodes.push(...host.missingHostCodes);
 
@@ -258,10 +251,10 @@ function collectConfiguredEntries(cwd: string): ConfiguredEntry[] {
 	const result: ConfiguredEntry[] = [];
 
 	const projectSettingsPath = path.join(cwd, ".pi", "settings.json");
-	const projectCtx = getExtraContext(readJSON(projectSettingsPath));
+	const projectCtx = getExtraContext(readSettings(projectSettingsPath));
 	const includes = new Set<string>(Array.isArray(projectCtx.includes) ? projectCtx.includes : []);
 
-	const globalCtx = getExtraContext(readJSON(SETTINGS_PATH));
+	const globalCtx = getExtraContext(readSettings(SETTINGS_PATH));
 	if (Array.isArray(globalCtx.files)) {
 		for (const entry of globalCtx.files as FileEntry[]) {
 			const { filePath, tags } = normalizeFileEntry(entry);
@@ -280,44 +273,20 @@ function collectConfiguredEntries(cwd: string): ConfiguredEntry[] {
 
 // ── 写入 ───────────────────────────────────────────────────────
 
-function readSettingsForWrite(settingsPath: string): Record<string, any> | null {
-	if (!fs.existsSync(settingsPath)) return {};
-	try {
-		return JSON.parse(fs.readFileSync(settingsPath, "utf-8"));
-	} catch {
-		return null; // parse failure — refuse to clobber
+/** The `extraContext` object a write mutates, created in place when missing or malformed. */
+function ensureExtraContext(settings: JsonObject): ExtraContextConfig {
+	const ctx = settings.extraContext;
+	if (isJsonObject(ctx)) {
+		if (!Array.isArray(ctx.files)) ctx.files = [];
+		return ctx as ExtraContextConfig;
 	}
-}
-
-function writeSettings(settingsPath: string, settings: Record<string, any>): boolean {
-	const dir = path.dirname(settingsPath);
-	if (!fs.existsSync(dir)) {
-		try {
-			fs.mkdirSync(dir, { recursive: true });
-		} catch {
-			return false;
-		}
-	}
-	try {
-		fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), "utf-8");
-		return true;
-	} catch {
-		return false;
-	}
-}
-
-function ensureExtraContext(settings: Record<string, any>): ExtraContextConfig {
-	if (!settings.extraContext || typeof settings.extraContext !== "object") {
-		settings.extraContext = {};
-	}
-	if (!Array.isArray(settings.extraContext.files)) {
-		settings.extraContext.files = [];
-	}
-	return settings.extraContext as ExtraContextConfig;
+	const made: ExtraContextConfig = { files: [] };
+	settings.extraContext = made;
+	return made;
 }
 
 function saveFileToSettings(settingsPath: string, entry: FileEntry): boolean {
-	const settings = readSettingsForWrite(settingsPath);
+	const settings = readSettings(settingsPath);
 	if (settings === null) return false;
 	const ctx = ensureExtraContext(settings);
 	const { filePath, tags } = normalizeFileEntry(entry);
@@ -332,7 +301,7 @@ function saveFileToSettings(settingsPath: string, entry: FileEntry): boolean {
 }
 
 function removeFileFromSettings(settingsPath: string, filePath: string): boolean {
-	const settings = readSettingsForWrite(settingsPath);
+	const settings = readSettings(settingsPath);
 	if (settings === null) return false;
 	const ctx = ensureExtraContext(settings);
 	const before = (ctx.files as FileEntry[]).length;
@@ -342,10 +311,10 @@ function removeFileFromSettings(settingsPath: string, filePath: string): boolean
 }
 
 function setIncludesInSettings(settingsPath: string, includes: string[]): boolean {
-	const settings = readSettingsForWrite(settingsPath);
+	const settings = readSettings(settingsPath);
 	if (settings === null) return false;
-	ensureExtraContext(settings);
-	settings.extraContext.includes = includes;
+	const ctx = ensureExtraContext(settings);
+	ctx.includes = includes;
 	return writeSettings(settingsPath, settings);
 }
 
@@ -586,11 +555,11 @@ export default function extraAgentsFilesExtension(pi: ExtensionAPI) {
 
 	async function cmdIncludes(ctx: ExtensionCommandContext) {
 		const projectSettingsPath = settingsPathFor(ctx, "project");
-		const projectCtx = getExtraContext(readJSON(projectSettingsPath));
+		const projectCtx = getExtraContext(readSettings(projectSettingsPath));
 		const currentIncludes = Array.isArray(projectCtx.includes) ? projectCtx.includes : [];
 
 		// 扫描全局配置里所有可用标签
-		const globalCtx = getExtraContext(readJSON(SETTINGS_PATH));
+		const globalCtx = getExtraContext(readSettings(SETTINGS_PATH));
 		const allTags = new Set<string>();
 		if (Array.isArray(globalCtx.files)) {
 			for (const entry of globalCtx.files as FileEntry[]) {

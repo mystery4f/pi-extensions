@@ -80,19 +80,19 @@ function jsonParseWithNewlineFix(str: string): any {
 
 export function preparePatchArguments(input: any): any {
 	if (!input || typeof input !== "object") return input;
-	const args = input as Record<string, any>;
+	const args = input as Record<string, unknown>;
 	if (typeof args.edits === "string") {
 		try {
-			const parsed = jsonParseWithNewlineFix(args.edits);
+			const parsed: unknown = jsonParseWithNewlineFix(args.edits);
 			if (Array.isArray(parsed)) args.edits = parsed;
 		} catch {
 			/* keep original */
 		}
 	}
 	if (typeof args.old_str === "string" && typeof args.new_str === "string") {
-		const edit: any = { old_str: args.old_str, new_str: args.new_str };
+		const edit: Record<string, unknown> = { old_str: args.old_str, new_str: args.new_str };
 		if (typeof args.anchor === "string") edit.anchor = args.anchor;
-		args.edits = args.edits ? [...args.edits, edit] : [edit];
+		args.edits = Array.isArray(args.edits) ? [...args.edits, edit] : [edit];
 		delete args.old_str;
 		delete args.new_str;
 		delete args.anchor;

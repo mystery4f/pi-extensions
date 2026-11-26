@@ -21,12 +21,12 @@
 
 ```json
 {
-  "extraContext": {
-    "hostRules": [
-      { "host": "desktop-3ubepm3", "codes": ["kfCode"] },
-      { "host": "home-pc", "codes": ["homeCode", "kfCode"] }
-    ]
-  }
+	"extraContext": {
+		"hostRules": [
+			{ "host": "desktop-3ubepm3", "codes": ["kfCode"] },
+			{ "host": "home-pc", "codes": ["homeCode", "kfCode"] }
+		]
+	}
 }
 ```
 

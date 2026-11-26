@@ -37,6 +37,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { isJsonObject } from "./settings-store.js";
 
 // ── Logging (debug only) ──────────────────────────────────────
 
@@ -94,13 +95,16 @@ function loadFirstTargets(): Map<string, { provider: string; modelId: string }> 
 	const map = new Map<string, { provider: string; modelId: string }>();
 	try {
 		const content = JSON.parse(fs.readFileSync(ROUTES_CONFIG_PATH, "utf-8"));
-		const routes: Record<string, any> = content.routes;
-		if (!routes || typeof routes !== "object") return map;
-		for (const [routeId, def] of Object.entries(routes)) {
-			const targets: any[] = def?.targets;
+		if (!isJsonObject(content) || !isJsonObject(content.routes)) return map;
+		for (const [routeId, def] of Object.entries(content.routes)) {
+			const targets = isJsonObject(def) ? def.targets : undefined;
 			if (!Array.isArray(targets) || targets.length === 0) continue;
-			const first = targets[0];
-			if (first?.provider && first?.modelId) {
+			const first: unknown = targets[0];
+			if (
+				isJsonObject(first) &&
+				typeof first.provider === "string" &&
+				typeof first.modelId === "string"
+			) {
 				map.set(routeId, { provider: first.provider, modelId: first.modelId });
 			}
 		}
