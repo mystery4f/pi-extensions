@@ -2,3 +2,6 @@ package-lock.json
 node_modules/
 # Local Pi runtime state
 .atl/
+# The global excludes file ignores docs/ and AGENTS.md; this repo tracks both.
+!docs/
+!AGENTS.md
