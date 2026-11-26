@@ -155,10 +155,7 @@ export function readMergedUsage(dir = DATA_DIR): UsageMap {
  * Move the pre-0.2 config into the tool-manager directory.
  * Returns true when a migration happened. Never overwrites an existing file.
  */
-export function migrateLegacyConfig(
-	target = CONFIG_FILE,
-	legacy = LEGACY_CONFIG_FILE,
-): boolean {
+export function migrateLegacyConfig(target = CONFIG_FILE, legacy = LEGACY_CONFIG_FILE): boolean {
 	try {
 		if (fs.existsSync(target) || !fs.existsSync(legacy)) return false;
 		fs.mkdirSync(path.dirname(target), { recursive: true });

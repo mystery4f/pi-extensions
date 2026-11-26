@@ -41,7 +41,10 @@ async function exists(path: string): Promise<boolean> {
 
 describe("parsePatch — structural errors", () => {
 	test("rejects patch missing '*** Begin Patch'", () => {
-		assert.throws(() => parsePatch("not a patch\n*** End Patch"), /first line of the patch must be/);
+		assert.throws(
+			() => parsePatch("not a patch\n*** End Patch"),
+			/first line of the patch must be/,
+		);
 	});
 
 	test("rejects patch missing '*** End Patch'", () => {

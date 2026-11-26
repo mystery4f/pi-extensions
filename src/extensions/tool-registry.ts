@@ -39,7 +39,11 @@ type PluginEntry = {
  * Resolve the plugin key for one tool. Mirrors `pluginLabel()` in tool-manager:
  * package → `npm:<pkg>`, git checkout → `git:<owner>/<repo>`, otherwise the source label.
  */
-function pluginOf(tool: ToolInfo): { key: PluginKey; origin: "npm" | "git" | "source"; detail: string } {
+function pluginOf(tool: ToolInfo): {
+	key: PluginKey;
+	origin: "npm" | "git" | "source";
+	detail: string;
+} {
 	const info = tool.sourceInfo;
 	const source = info?.source ?? "extension";
 
@@ -119,160 +123,158 @@ function normalizePluginQuery(query: string): string {
 
 function makeRegistryTool(listTools: () => ToolInfo[]) {
 	return defineTool({
-	name: "registry",
-	label: "Tool registry",
-	description:
-		"Look up the relationship between tools and the plugins that provide them. " +
-		"Query by plugin (list its tools) or by tool (find its plugin). Plugins are " +
-		"identified as npm:<pkg> or git:<owner>/<repo>. Use it before debugging a tool, " +
-		"before writing a subagent's tools: whitelist or extensions: field, or to see " +
-		"everything one plugin provides — one call returns the tool names instead of " +
-		"reading the package source.",
-	parameters: Type.Object({
-		plugin: Type.Optional(
-			Type.String({
-				description:
-					"Plugin to list tools for, as npm:<pkg> or git:<owner>/<repo> " +
-					"(bare owner/repo or package name also accepted). Omit when querying by tool.",
-			}),
-		),
-		tool: Type.Optional(
-			Type.String({
-				description:
-					"Tool name to resolve to its providing plugin. Omit when querying by plugin.",
-			}),
-		),
-		listPlugins: Type.Optional(
-			Type.Boolean({
-				description:
-					"List every distinct plugin with its tool count (default: false). " +
-					"Set true when you want an overview instead of a specific lookup.",
-			}),
-		),
-	}),
-	promptSnippet:
-		"registry: find which plugin provides a tool, or which tools a plugin provides (npm:/git: ids)",
-	promptGuidelines: [
-		"Before debugging or reporting a failing tool, call `registry` with tool=<name> to learn which plugin provides it.",
-		"To see every tool a plugin ships, call `registry` with plugin=npm:<pkg> or plugin=git:<owner>/<repo>.",
-	],
+		name: "registry",
+		label: "Tool registry",
+		description:
+			"Look up the relationship between tools and the plugins that provide them. " +
+			"Query by plugin (list its tools) or by tool (find its plugin). Plugins are " +
+			"identified as npm:<pkg> or git:<owner>/<repo>. Use it before debugging a tool, " +
+			"before writing a subagent's tools: whitelist or extensions: field, or to see " +
+			"everything one plugin provides — one call returns the tool names instead of " +
+			"reading the package source.",
+		parameters: Type.Object({
+			plugin: Type.Optional(
+				Type.String({
+					description:
+						"Plugin to list tools for, as npm:<pkg> or git:<owner>/<repo> " +
+						"(bare owner/repo or package name also accepted). Omit when querying by tool.",
+				}),
+			),
+			tool: Type.Optional(
+				Type.String({
+					description:
+						"Tool name to resolve to its providing plugin. Omit when querying by plugin.",
+				}),
+			),
+			listPlugins: Type.Optional(
+				Type.Boolean({
+					description:
+						"List every distinct plugin with its tool count (default: false). " +
+						"Set true when you want an overview instead of a specific lookup.",
+				}),
+			),
+		}),
+		promptSnippet:
+			"registry: find which plugin provides a tool, or which tools a plugin provides (npm:/git: ids)",
+		promptGuidelines: [
+			"Before debugging or reporting a failing tool, call `registry` with tool=<name> to learn which plugin provides it.",
+			"To see every tool a plugin ships, call `registry` with plugin=npm:<pkg> or plugin=git:<owner>/<repo>.",
+		],
 
-	async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-		const all = listTools();
-		const index = buildIndex(all);
-		const lines: string[] = [];
-		const details: { plugins?: PluginEntry[]; match?: PluginEntry; tool?: unknown } = {};
+		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+			const all = listTools();
+			const index = buildIndex(all);
+			const lines: string[] = [];
+			const details: { plugins?: PluginEntry[]; match?: PluginEntry; tool?: unknown } = {};
 
-		if (params.listPlugins) {
-			const entries = [...index.values()].sort((a, b) => b.tools.length - a.tools.length);
-			details.plugins = entries;
-			lines.push(`${entries.length} plugin(s), ${all.length} tool(s) total:`);
-			for (const e of entries) {
-				lines.push(`  ${e.plugin} — ${e.tools.length} tool(s)`);
-			}
-			return {
-				content: [{ type: "text", text: lines.join("\n") }],
-				details,
-			};
-		}
-
-		if (params.plugin) {
-			const key = normalizePluginQuery(params.plugin);
-			let entry = index.get(key);
-			if (!entry) {
-				// Fall back: suffix match on the query (bare name vs npm:/git: id),
-				// then a case-insensitive comparison across all known plugins.
-				const tail = params.plugin.trim().toLowerCase();
-				const candidates = [...index.values()].filter((e) =>
-					e.plugin.toLowerCase().endsWith(tail),
-				);
-				entry =
-					candidates.length > 0
-						? candidates[0]
-						: [...index.values()].find((e) => e.plugin.toLowerCase() === tail);
-			}
-			if (!entry) {
-				const known = [...index.keys()].sort();
+			if (params.listPlugins) {
+				const entries = [...index.values()].sort((a, b) => b.tools.length - a.tools.length);
+				details.plugins = entries;
+				lines.push(`${entries.length} plugin(s), ${all.length} tool(s) total:`);
+				for (const e of entries) {
+					lines.push(`  ${e.plugin} — ${e.tools.length} tool(s)`);
+				}
 				return {
-					content: [
-						{
-							type: "text",
-							text:
-								`No plugin matching "${params.plugin}" (normalized: "${key}").\n` +
-								`Known plugins:\n${known.map((k) => `  ${k}`).join("\n")}`,
-						},
-					],
-					details: { known },
+					content: [{ type: "text", text: lines.join("\n") }],
+					details,
 				};
 			}
-			details.match = entry;
-			lines.push(`${entry.plugin} — ${entry.tools.length} tool(s):`);
-			for (const t of entry.tools) {
-				lines.push(`  ${t.name}${t.description ? ` — ${t.description}` : ""}`);
-			}
-			return {
-				content: [{ type: "text", text: lines.join("\n") }],
-				details,
-			};
-		}
 
-		if (params.tool) {
-			const wanted = params.tool.trim();
-			const hits = all.filter((t) => t.name === wanted);
-			if (hits.length === 0) {
-				const near = all.filter((t) => t.name.includes(wanted)).map((t) => t.name);
+			if (params.plugin) {
+				const key = normalizePluginQuery(params.plugin);
+				let entry = index.get(key);
+				if (!entry) {
+					// Fall back: suffix match on the query (bare name vs npm:/git: id),
+					// then a case-insensitive comparison across all known plugins.
+					const tail = params.plugin.trim().toLowerCase();
+					const candidates = [...index.values()].filter((e) =>
+						e.plugin.toLowerCase().endsWith(tail),
+					);
+					entry =
+						candidates.length > 0
+							? candidates[0]
+							: [...index.values()].find((e) => e.plugin.toLowerCase() === tail);
+				}
+				if (!entry) {
+					const known = [...index.keys()].sort();
+					return {
+						content: [
+							{
+								type: "text",
+								text:
+									`No plugin matching "${params.plugin}" (normalized: "${key}").\n` +
+									`Known plugins:\n${known.map((k) => `  ${k}`).join("\n")}`,
+							},
+						],
+						details: { known },
+					};
+				}
+				details.match = entry;
+				lines.push(`${entry.plugin} — ${entry.tools.length} tool(s):`);
+				for (const t of entry.tools) {
+					lines.push(`  ${t.name}${t.description ? ` — ${t.description}` : ""}`);
+				}
 				return {
-					content: [
-						{
-							type: "text",
-							text:
-								`No tool named "${wanted}".` +
-								(near.length
-									? `\nSimilar:\n${near.map((n) => `  ${n}`).join("\n")}`
-									: ""),
-						},
-					],
-					details: { similar: near },
+					content: [{ type: "text", text: lines.join("\n") }],
+					details,
 				};
 			}
-			const resolved = hits.map((t) => {
-				const { key, origin } = pluginOf(t);
+
+			if (params.tool) {
+				const wanted = params.tool.trim();
+				const hits = all.filter((t) => t.name === wanted);
+				if (hits.length === 0) {
+					const near = all.filter((t) => t.name.includes(wanted)).map((t) => t.name);
+					return {
+						content: [
+							{
+								type: "text",
+								text:
+									`No tool named "${wanted}".` +
+									(near.length ? `\nSimilar:\n${near.map((n) => `  ${n}`).join("\n")}` : ""),
+							},
+						],
+						details: { similar: near },
+					};
+				}
+				const resolved = hits.map((t) => {
+					const { key, origin } = pluginOf(t);
+					return {
+						tool: t.name,
+						plugin: key,
+						origin,
+						scope: t.sourceInfo?.scope,
+						path: t.sourceInfo?.path,
+						description: (t.description ?? "").split("\n")[0] ?? "",
+					};
+				});
+				details.tool = resolved;
+				for (const r of resolved) {
+					lines.push(
+						`${r.tool} → ${r.plugin}` +
+							(r.scope ? ` (scope: ${r.scope})` : "") +
+							(r.path ? `\n  path: ${r.path}` : ""),
+					);
+					if (r.description) lines.push(`  ${r.description}`);
+				}
 				return {
-					tool: t.name,
-					plugin: key,
-					origin,
-					scope: t.sourceInfo?.scope,
-					path: t.sourceInfo?.path,
-					description: (t.description ?? "").split("\n")[0] ?? "",
+					content: [{ type: "text", text: lines.join("\n") }],
+					details,
 				};
-			});
-			details.tool = resolved;
-			for (const r of resolved) {
-				lines.push(
-					`${r.tool} → ${r.plugin}` +
-						(r.scope ? ` (scope: ${r.scope})` : "") +
-						(r.path ? `\n  path: ${r.path}` : ""),
-				);
-				if (r.description) lines.push(`  ${r.description}`);
 			}
+
 			return {
-				content: [{ type: "text", text: lines.join("\n") }],
+				content: [
+					{
+						type: "text",
+						text:
+							"Specify one of: plugin (npm:<pkg> / git:<owner>/<repo>), tool (<name>), " +
+							"or listPlugins=true.",
+					},
+				],
 				details,
 			};
-		}
-
-		return {
-			content: [
-				{
-					type: "text",
-					text:
-						"Specify one of: plugin (npm:<pkg> / git:<owner>/<repo>), tool (<name>), " +
-						"or listPlugins=true.",
-				},
-			],
-			details,
-		};
-	},
+		},
 	});
 }
 

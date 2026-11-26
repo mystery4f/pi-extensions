@@ -66,7 +66,10 @@ describe("applyClassicEdits — single edit", () => {
 			const file = join(dir, "a.txt");
 			await writeFile(file, "hello world\n");
 			const edits: EditItem[] = [{ path: "a.txt", oldText: "absent", newText: "x" }];
-			await assert.rejects(() => applyClassicEdits(edits, makeWorkspace(), dir), /Could not find the exact text/);
+			await assert.rejects(
+				() => applyClassicEdits(edits, makeWorkspace(), dir),
+				/Could not find the exact text/,
+			);
 		});
 	});
 });
@@ -83,7 +86,10 @@ describe("applyClassicEdits — multi edit, same file", () => {
 			];
 			const results = await applyClassicEdits(edits, makeWorkspace(), dir);
 
-			assert.equal(results.every((r) => r.success), true);
+			assert.equal(
+				results.every((r) => r.success),
+				true,
+			);
 			assert.equal(await readFile(file, "utf-8"), "AAA\nbbb\nCCC\n");
 		});
 	});
@@ -121,7 +127,10 @@ describe("applyClassicEdits — multi edit, multiple files", () => {
 			];
 			const results = await applyClassicEdits(edits, makeWorkspace(), dir);
 
-			assert.equal(results.every((r) => r.success), true);
+			assert.equal(
+				results.every((r) => r.success),
+				true,
+			);
 			assert.equal(await readFile(a, "utf-8"), "ALPHA\n");
 			assert.equal(await readFile(b, "utf-8"), "BETA\n");
 		});
@@ -216,7 +225,11 @@ describe("applyClassicEdits — trailing whitespace tolerance", () => {
 			await writeFile(file, "const x = 1;\nconst y = 2;\n");
 
 			const edits: EditItem[] = [
-				{ path: "ws.ts", oldText: "const x = 1;  \nconst y = 2;  \n", newText: "const x = 10;\nconst y = 20;\n" },
+				{
+					path: "ws.ts",
+					oldText: "const x = 1;  \nconst y = 2;  \n",
+					newText: "const x = 10;\nconst y = 20;\n",
+				},
 			];
 			const results = await applyClassicEdits(edits, makeWorkspace(), dir);
 			assert.equal(results[0].success, true);

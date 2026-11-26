@@ -25,30 +25,30 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
  * escaped as either \uXXXX or plain \ + char.
  */
 function decodeUnicodeEscapes(str: string): string {
-  return str
-    // Step 1: decode \uXXXX Unicode escape sequences
-    .replace(/\\u([0-9a-fA-F]{4})/g, (_, code) =>
-      String.fromCharCode(parseInt(code, 16))
-    )
-    // Step 2: strip stray backslashes before CJK characters
-    // (e.g. \已\达\到 → 已达到)
-    .replace(/\\(?=[一-鿿㐀-䶿　-〿＀-￯])/g, "");
+	return (
+		str
+			// Step 1: decode \uXXXX Unicode escape sequences
+			.replace(/\\u([0-9a-fA-F]{4})/g, (_, code) => String.fromCharCode(parseInt(code, 16)))
+			// Step 2: strip stray backslashes before CJK characters
+			// (e.g. \已\达\到 → 已达到)
+			.replace(/\\(?=[一-鿿㐀-䶿　-〿＀-￯])/g, "")
+	);
 }
 
 export default function zhipuProvider(pi: ExtensionAPI) {
-  // Fix: Decode Unicode escape sequences in error messages from Zhipu API
-  pi.on("message_end", (event) => {
-    if (
-      event.message.role === "assistant" &&
-      event.message.stopReason === "error" &&
-      event.message.errorMessage
-    ) {
-      const decoded = decodeUnicodeEscapes(event.message.errorMessage);
-      if (decoded !== event.message.errorMessage) {
-        return {
-          message: { ...event.message, errorMessage: decoded },
-        };
-      }
-    }
-  });
+	// Fix: Decode Unicode escape sequences in error messages from Zhipu API
+	pi.on("message_end", (event) => {
+		if (
+			event.message.role === "assistant" &&
+			event.message.stopReason === "error" &&
+			event.message.errorMessage
+		) {
+			const decoded = decodeUnicodeEscapes(event.message.errorMessage);
+			if (decoded !== event.message.errorMessage) {
+				return {
+					message: { ...event.message, errorMessage: decoded },
+				};
+			}
+		}
+	});
 }

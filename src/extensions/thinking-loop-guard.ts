@@ -73,10 +73,7 @@ const DEFAULT_CONFIG: GuardConfig = {
 	distinctMin: 3,
 };
 
-const AGENT_DIR = path.join(
-	process.env.USERPROFILE || process.env.HOME || "~",
-	".pi/agent",
-);
+const AGENT_DIR = path.join(process.env.USERPROFILE || process.env.HOME || "~", ".pi/agent");
 
 function readSettingsBlock(settingsPath: string): Record<string, unknown> | undefined {
 	try {
@@ -89,9 +86,7 @@ function readSettingsBlock(settingsPath: string): Record<string, unknown> | unde
 }
 
 function num(value: unknown, fallback: number): number {
-	return typeof value === "number" && Number.isFinite(value) && value > 0
-		? value
-		: fallback;
+	return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
 function strList(value: unknown): string[] | undefined {
@@ -130,7 +125,11 @@ function loadConfig(cwd: string): GuardConfig {
 		.map((s) => s.trim())
 		.filter(Boolean);
 	if (envModels?.length) cfg.models = envModels;
-	if (process.env.THINKING_LOOP_GUARD_ACTION === "abort" || process.env.THINKING_LOOP_GUARD_ACTION === "warn" || process.env.THINKING_LOOP_GUARD_ACTION === "retry")
+	if (
+		process.env.THINKING_LOOP_GUARD_ACTION === "abort" ||
+		process.env.THINKING_LOOP_GUARD_ACTION === "warn" ||
+		process.env.THINKING_LOOP_GUARD_ACTION === "retry"
+	)
 		cfg.action = process.env.THINKING_LOOP_GUARD_ACTION;
 	cfg.maxRetries = num(process.env.THINKING_LOOP_GUARD_MAX_RETRIES, cfg.maxRetries);
 	cfg.toolRepeatCount = num(process.env.THINKING_LOOP_GUARD_TOOL_REPEAT_COUNT, cfg.toolRepeatCount);
@@ -146,7 +145,12 @@ function loadConfig(cwd: string): GuardConfig {
 
 function globMatch(pattern: string, value: string): boolean {
 	const rx = new RegExp(
-		"^" + pattern.split("*").map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(".*") + "$",
+		"^" +
+			pattern
+				.split("*")
+				.map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+				.join(".*") +
+			"$",
 	);
 	return rx.test(value);
 }
@@ -260,7 +264,10 @@ export default function thinkingLoopGuard(pi: ExtensionAPI) {
 	};
 
 	// Escalating action for one loop event. detail describes what was detected.
-	const intervene = (ctx: import("@earendil-works/pi-coding-agent").ExtensionContext, detail: string) => {
+	const intervene = (
+		ctx: import("@earendil-works/pi-coding-agent").ExtensionContext,
+		detail: string,
+	) => {
 		if (cfg.action === "warn") {
 			ctx.ui.notify(`thinking-loop-guard: ${detail} (warning only)`, "warning");
 			return;

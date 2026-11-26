@@ -8,12 +8,7 @@ import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import * as path from "node:path";
 
-import {
-	hostFileOf,
-	isSafeCode,
-	parseHostRules,
-	resolveHostCodes,
-} from "../host-rules.ts";
+import { hostFileOf, isSafeCode, parseHostRules, resolveHostCodes } from "../host-rules.ts";
 
 describe("isSafeCode", () => {
 	test("accepts a plain code, mixed case and dots", () => {
@@ -23,16 +18,7 @@ describe("isSafeCode", () => {
 	});
 
 	test("refuses anything that could leave the directory", () => {
-		for (const code of [
-			"",
-			"../kfCode",
-			"a/b",
-			"a\\b",
-			"C:x",
-			".hidden",
-			"kf Code",
-			"kfCode ",
-		]) {
+		for (const code of ["", "../kfCode", "a/b", "a\\b", "C:x", ".hidden", "kf Code", "kfCode "]) {
 			assert.equal(isSafeCode(code), false, code);
 		}
 	});

@@ -47,7 +47,9 @@ function log(...args: any[]) {
 	if (!DEBUG_ENABLED) return;
 	try {
 		fs.appendFileSync(LOG_FILE, `[${new Date().toISOString()}] ${args.join(" ")}\n`);
-	} catch { /* best-effort */ }
+	} catch {
+		/* best-effort */
+	}
 }
 
 // ── Types ──────────────────────────────────────────────────────
@@ -80,7 +82,13 @@ export interface RouterBridgeAPI {
 
 // ── Route config helpers ──────────────────────────────────────
 
-const ROUTES_CONFIG_PATH = path.join(os.homedir(), ".pi", "agent", "extensions", "auto-router.routes.json");
+const ROUTES_CONFIG_PATH = path.join(
+	os.homedir(),
+	".pi",
+	"agent",
+	"extensions",
+	"auto-router.routes.json",
+);
 
 function loadFirstTargets(): Map<string, { provider: string; modelId: string }> {
 	const map = new Map<string, { provider: string; modelId: string }>();
@@ -96,7 +104,9 @@ function loadFirstTargets(): Map<string, { provider: string; modelId: string }> 
 				map.set(routeId, { provider: first.provider, modelId: first.modelId });
 			}
 		}
-	} catch { /* routes file missing or unparseable */ }
+	} catch {
+		/* routes file missing or unparseable */
+	}
 	return map;
 }
 
@@ -116,8 +126,12 @@ export default function routerBridgeExtension(pi: ExtensionAPI) {
 	function findCtxInRegistry(provider: string, modelId: string): number | undefined {
 		if (!latestCtx?.modelRegistry?.getAvailable) return undefined;
 		try {
-			const available = latestCtx.modelRegistry.getAvailable() as Array<{ provider: string; id: string; contextWindow?: number }>;
-			const found = available.find(m => m.provider === provider && m.id === modelId);
+			const available = latestCtx.modelRegistry.getAvailable() as Array<{
+				provider: string;
+				id: string;
+				contextWindow?: number;
+			}>;
+			const found = available.find((m) => m.provider === provider && m.id === modelId);
 			return found?.contextWindow;
 		} catch {
 			return undefined;
@@ -128,7 +142,8 @@ export default function routerBridgeExtension(pi: ExtensionAPI) {
 	function getRoutedModel(): RoutedModel | undefined {
 		if (!currentRouteId) return undefined;
 		try {
-			return (globalThis as any).__piCacheOptimizerRouter?.getRoutedModel?.(currentRouteId) as RoutedModel | undefined;
+			return (globalThis as any).__piCacheOptimizerRouter?.getRoutedModel?.(currentRouteId) as
+				RoutedModel | undefined;
 		} catch {
 			return undefined;
 		}
@@ -148,7 +163,9 @@ export default function routerBridgeExtension(pi: ExtensionAPI) {
 			if (routed) {
 				const cw = findCtxInRegistry(routed.provider, routed.modelId);
 				if (cw) return cw;
-				log(`resolveCtxWindow: routed model ${routed.provider}/${routed.modelId} not found in registry`);
+				log(
+					`resolveCtxWindow: routed model ${routed.provider}/${routed.modelId} not found in registry`,
+				);
 			}
 
 			// Level 2: first target of the route (no decision yet, show the default)
@@ -156,7 +173,9 @@ export default function routerBridgeExtension(pi: ExtensionAPI) {
 			if (first) {
 				const cw = findCtxInRegistry(first.provider, first.modelId);
 				if (cw) return cw;
-				log(`resolveCtxWindow: first target ${first.provider}/${first.modelId} not found in registry`);
+				log(
+					`resolveCtxWindow: first target ${first.provider}/${first.modelId} not found in registry`,
+				);
 			}
 		}
 
@@ -182,7 +201,9 @@ export default function routerBridgeExtension(pi: ExtensionAPI) {
 			const usage = latestCtx.getContextUsage?.();
 			if (!usage) return undefined;
 
-			log(`getActualPercent: ctxWin=${ctxWin}, tokens=${usage.tokens}, usage.cw=${usage.contextWindow}, usage.percent=${usage.percent}`);
+			log(
+				`getActualPercent: ctxWin=${ctxWin}, tokens=${usage.tokens}, usage.cw=${usage.contextWindow}, usage.percent=${usage.percent}`,
+			);
 
 			// Path A: exact token count (most accurate)
 			if (typeof usage.tokens === "number" && usage.tokens > 0) {
@@ -232,7 +253,9 @@ export default function routerBridgeExtension(pi: ExtensionAPI) {
 		currentRouteId = ctx.model?.provider === "auto-router" ? ctx.model.id : undefined;
 		firstTargets = loadFirstTargets();
 		targetsLoaded = true;
-		log(`session_start: model=${ctx.model?.provider}/${ctx.model?.id}, routeId=${currentRouteId}, routes=${firstTargets.size}`);
+		log(
+			`session_start: model=${ctx.model?.provider}/${ctx.model?.id}, routeId=${currentRouteId}, routes=${firstTargets.size}`,
+		);
 	});
 
 	pi.on("model_select", async (event, ctx) => {
@@ -247,12 +270,12 @@ export default function routerBridgeExtension(pi: ExtensionAPI) {
 		const first = currentRouteId ? firstTargets.get(currentRouteId) : undefined;
 		log(
 			`model_select: model=${event.model?.provider}/${event.model?.id}, ` +
-			`prev=${event.previousModel?.provider}/${event.previousModel?.id}, ` +
-			`source=${event.source}, ` +
-			`routeId=${currentRouteId}, ` +
-			`firstTarget=${first?.provider}/${first?.modelId}, ` +
-			`ctx.cw=${ctx.model?.contextWindow}, ` +
-			`usage.tokens=${usage?.tokens}, usage.pct=${usage?.percent}`
+				`prev=${event.previousModel?.provider}/${event.previousModel?.id}, ` +
+				`source=${event.source}, ` +
+				`routeId=${currentRouteId}, ` +
+				`firstTarget=${first?.provider}/${first?.modelId}, ` +
+				`ctx.cw=${ctx.model?.contextWindow}, ` +
+				`usage.tokens=${usage?.tokens}, usage.pct=${usage?.percent}`,
 		);
 	});
 }
@@ -260,8 +283,7 @@ export default function routerBridgeExtension(pi: ExtensionAPI) {
 // ── Standalone helpers ────────────────────────────────────────
 
 function humanReadable(n: number): string {
-	if (n >= 1_000_000)
-		return `${(n / 1_000_000).toFixed(n % 1_000_000 === 0 ? 0 : 1)}M`;
+	if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n % 1_000_000 === 0 ? 0 : 1)}M`;
 	if (n >= 1_000) return `${Math.round(n / 1_000)}k`;
 	return `${n}`;
 }
@@ -277,10 +299,10 @@ function humanReadable(n: number): string {
 (function registerRetryableErrorHook() {
 	// Tier 1: exact/specific patterns (likely error codes or API-specific messages)
 	const SPECIFIC_PATTERNS = [
-		"rate_limit_error",            // zhipu error type (underscore, not in built-in "rate limit")
-		"rate_limit_exceeded",         // common API error code variant
-		"request_rate_limit",          // another common variant
-		"too_many_requests",           // snake_case variant
+		"rate_limit_error", // zhipu error type (underscore, not in built-in "rate limit")
+		"rate_limit_exceeded", // common API error code variant
+		"request_rate_limit", // another common variant
+		"too_many_requests", // snake_case variant
 	];
 
 	// Tier 2: Chinese patterns for rate-limiting, quota, and capacity errors
@@ -288,36 +310,36 @@ function humanReadable(n: number): string {
 	// return Chinese-only error messages without "429" or "rate limit" in them.
 	const CHINESE_PATTERNS = [
 		// Rate / frequency limiting
-		"\u9891\u7387\u8fc7\u9ad8",       // "频率过高" (frequency too high)
-		"\u9891\u7387\u9650\u5236",       // "频率限制" (rate limit)
-		"\u8d85\u51fa\u9891\u7387",       // "超出频率" (exceeded rate/frequency)
-		"\u8bf7\u6c42\u9891\u7387",       // "请求频率" (request frequency)
-		"\u9650\u6d41",                   // "限流" (rate limiting)
-		"\u8bbf\u95ee\u9891\u7e41",       // "访问频繁" (access too frequent)
+		"\u9891\u7387\u8fc7\u9ad8", // "频率过高" (frequency too high)
+		"\u9891\u7387\u9650\u5236", // "频率限制" (rate limit)
+		"\u8d85\u51fa\u9891\u7387", // "超出频率" (exceeded rate/frequency)
+		"\u8bf7\u6c42\u9891\u7387", // "请求频率" (request frequency)
+		"\u9650\u6d41", // "限流" (rate limiting)
+		"\u8bbf\u95ee\u9891\u7e41", // "访问频繁" (access too frequent)
 		"\u8bf7\u6c42\u8fc7\u4e8e\u9891\u7e41", // "请求过于频繁" (too frequent requests)
-		"\u8bf7\u6c42\u8fc7\u5feb",       // "请求过快" (request too fast)
+		"\u8bf7\u6c42\u8fc7\u5feb", // "请求过快" (request too fast)
 		"\u8c03\u7528\u6b21\u6570\u5df2\u8fbe", // "调用次数已达" (call count reached)
-		"\u5df2\u8fbe\u4e0a\u9650",       // "已达上限" (reached upper limit)
+		"\u5df2\u8fbe\u4e0a\u9650", // "已达上限" (reached upper limit)
 
 		// Quota / usage limits
-		"\u5df2\u8fbe\u5230",             // "已达到" (reached)
-		"\u4f7f\u7528\u4e0a\u9650",       // "使用上限" (usage limit)
-		"\u9650\u989d\u5c06\u5728",       // "限额将在" (quota will [reset at])
-		"\u8d85\u51fa\u9650\u5236",       // "超出限制" (exceeded limit)
-		"\u914d\u989d\u4e0d\u8db3",       // "配额不足" (insufficient quota)
-		"\u989d\u5ea6\u4e0d\u8db3",       // "额度不足" (insufficient balance/quota)
-		"\u4f59\u989d\u4e0d\u8db3",       // "余额不足" (insufficient balance)
+		"\u5df2\u8fbe\u5230", // "已达到" (reached)
+		"\u4f7f\u7528\u4e0a\u9650", // "使用上限" (usage limit)
+		"\u9650\u989d\u5c06\u5728", // "限额将在" (quota will [reset at])
+		"\u8d85\u51fa\u9650\u5236", // "超出限制" (exceeded limit)
+		"\u914d\u989d\u4e0d\u8db3", // "配额不足" (insufficient quota)
+		"\u989d\u5ea6\u4e0d\u8db3", // "额度不足" (insufficient balance/quota)
+		"\u4f59\u989d\u4e0d\u8db3", // "余额不足" (insufficient balance)
 
 		// Retry / backoff hints (often accompanied by 429)
-		"\u7a0d\u540e\u518d\u8bd5",       // "稍后再试" (try again later)
-		"\u7a0d\u540e\u91cd\u8bd5",       // "稍后重试" (try again later, variant)
+		"\u7a0d\u540e\u518d\u8bd5", // "稍后再试" (try again later)
+		"\u7a0d\u540e\u91cd\u8bd5", // "稍后重试" (try again later, variant)
 		"\u8bf7\u7a0d\u540e\u91cd\u8bd5", // "请稍后重试" (please try again later)
 		"\u8bf7\u7a0d\u5019\u518d\u8bd5", // "请稍候再试" (please wait and try again)
 
 		// HTTP status embedded in Chinese messages
-		"\u8d85\u65f6",                   // "超时" (timeout)
+		"\u8d85\u65f6", // "超时" (timeout)
 		"\u670d\u52a1\u4e0d\u53ef\u7528", // "服务不可用" (service unavailable)
-		"\u7f51\u5173\u9519\u8bef",       // "网关错误" (gateway error)
+		"\u7f51\u5173\u9519\u8bef", // "网关错误" (gateway error)
 	];
 
 	const ALL_PATTERNS = [...SPECIFIC_PATTERNS, ...CHINESE_PATTERNS];
@@ -376,10 +398,7 @@ function humanReadable(n: number): string {
 
 		// Fallback: check string message for rate-limit indicators.
 		const message = String(
-			(error as any)?.errorMessage ??
-			(error as any)?.message ??
-			error ??
-			""
+			(error as any)?.errorMessage ?? (error as any)?.message ?? error ?? "",
 		).toLowerCase();
 
 		if (

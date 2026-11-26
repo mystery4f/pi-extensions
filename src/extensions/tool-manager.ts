@@ -184,9 +184,11 @@ function toolSourceLabel(tool: { name: string; sourceInfo?: { source?: string } 
  * Best-effort plugin/package name for a tool: npm package directory, git
  * package owner/repo, or the top-level extension directory name.
  */
-function pluginLabel(
-	sourceInfo?: { path?: string; origin?: string; baseDir?: string },
-): string | undefined {
+function pluginLabel(sourceInfo?: {
+	path?: string;
+	origin?: string;
+	baseDir?: string;
+}): string | undefined {
 	if (!sourceInfo?.path) return undefined;
 	if (sourceInfo.origin !== "package") {
 		// Top-level extension file: use its directory name.
@@ -200,9 +202,7 @@ function pluginLabel(
 		const pkg = segments[nm + 1];
 		return pkg.startsWith("@") ? `${pkg}/${segments[nm + 2]}` : pkg;
 	}
-	const git = segments.findIndex(
-		(seg) => seg === "git-github.com" || seg === "github.com",
-	);
+	const git = segments.findIndex((seg) => seg === "git-github.com" || seg === "github.com");
 	if (git >= 0) {
 		// git-github.com/<hash>/<owner>/<repo> or git/github.com/<owner>/<repo>
 		const rest = segments
@@ -432,11 +432,7 @@ export class ToolManagerPicker {
 				this.filter === "all" ? "enabled" : this.filter === "enabled" ? "disabled" : "all";
 		} else if (!this.searchMode && data === "o") {
 			this.sort =
-				this.sort === "name"
-					? "count-desc"
-					: this.sort === "count-desc"
-						? "count-asc"
-						: "name";
+				this.sort === "name" ? "count-desc" : this.sort === "count-desc" ? "count-asc" : "name";
 		} else if (!this.searchMode && data === "?") {
 			this.helpOpen = !this.helpOpen;
 			if (this.helpOpen) this.detailOpen = false;
@@ -532,9 +528,7 @@ export class ToolManagerPicker {
 	 */
 	private detailLines(row: ToolRow | undefined, width: number): string[] {
 		const out: string[] = [];
-		out.push(
-			this.theme.fg("dim", " " + "─".repeat(Math.max(1, width - 3))),
-		);
+		out.push(this.theme.fg("dim", " " + "─".repeat(Math.max(1, width - 3))));
 		if (!row) {
 			out.push(this.theme.fg("dim", " (no tool selected)"));
 			return out;
@@ -628,13 +622,9 @@ export class ToolManagerPicker {
 		const twoColumns = inner >= HELP_TWO_COLUMN_WIDTH;
 		const columns = twoColumns ? [KEYMAP.slice(0, 3), KEYMAP.slice(3)] : [KEYMAP];
 		const rendered = columns.map((sections) => sections.flatMap(format));
-		const columnWidth = twoColumns
-			? Math.floor((inner - HELP_COLUMN_GAP) / 2)
-			: inner;
+		const columnWidth = twoColumns ? Math.floor((inner - HELP_COLUMN_GAP) / 2) : inner;
 		const height = Math.max(...rendered.map((lines) => lines.length));
-		const block = [
-			this.theme.fg("dim", truncateToWidth(" keys · ? or esc closes", width - 2)),
-		];
+		const block = [this.theme.fg("dim", truncateToWidth(" keys · ? or esc closes", width - 2))];
 		for (let row = 0; row < height; row++) {
 			const cells = rendered.map((lines) =>
 				truncateToWidth(lines[row] ?? "", columnWidth, "…", true),
@@ -657,7 +647,8 @@ export class ToolManagerPicker {
 				: "Tools — session selection";
 		lines.push(this.theme.fg("accent", this.theme.bold(` ${scopeLabel}`)));
 		let status = this.theme.fg("dim", ` ${enabledCount}/${this.rows.length} enabled`);
-		const viewLabel = this.filter === "all" ? "all" : this.filter === "enabled" ? "enabled" : "disabled";
+		const viewLabel =
+			this.filter === "all" ? "all" : this.filter === "enabled" ? "enabled" : "disabled";
 		status += this.theme.fg(this.filter === "all" ? "dim" : "accent", `  view:${viewLabel}`);
 		if (this.savedMessage) {
 			status += this.theme.fg("success", `  ${this.savedMessage}`);
@@ -691,10 +682,7 @@ export class ToolManagerPicker {
 			const index = this.scrollOffset + i;
 			const checkbox = this.checked.has(row.name) ? "[x]" : "[ ]";
 			const cursorMark = index === this.cursor ? ">" : " ";
-			const name = this.theme.fg(
-				this.checked.has(row.name) ? "success" : "dim",
-				row.name,
-			);
+			const name = this.theme.fg(this.checked.has(row.name) ? "success" : "dim", row.name);
 			const source = this.theme.fg("dim", ` (${row.plugin ?? row.source})`);
 			const usageLabel = row.usage
 				? this.theme.fg(
@@ -758,8 +746,7 @@ export default function toolManager(pi: ExtensionAPI) {
 	});
 	pi.on("turn_end", () => usageRecorder.flush());
 
-	const effectiveDisabled = (): Set<string> | undefined =>
-		sessionDisabled ?? globalDisabled;
+	const effectiveDisabled = (): Set<string> | undefined => sessionDisabled ?? globalDisabled;
 
 	/**
 	 * Apply the effective disabled set to the live tool list.
@@ -872,7 +859,6 @@ export default function toolManager(pi: ExtensionAPI) {
 		globalDisabled = undefined;
 	});
 
-
 	/** Persist + enforce a picker selection; the picker flashes the feedback. */
 	const applySelection = (
 		ctx: ExtensionCommandContext,
@@ -880,9 +866,7 @@ export default function toolManager(pi: ExtensionAPI) {
 		rows: ToolRow[],
 		checked: Set<string>,
 	): void => {
-		const disabledAfter = new Set(
-			rows.map((row) => row.name).filter((name) => !checked.has(name)),
-		);
+		const disabledAfter = new Set(rows.map((row) => row.name).filter((name) => !checked.has(name)));
 		if (scope === "global") {
 			globalDisabled = disabledAfter;
 			saveGlobalDisabled(disabledAfter);
@@ -916,8 +900,7 @@ export default function toolManager(pi: ExtensionAPI) {
 	};
 
 	pi.registerCommand("tools", {
-		description:
-			"Interactively enable/disable tools (/tools, /tools clear [global], /tools usage)",
+		description: "Interactively enable/disable tools (/tools, /tools clear [global], /tools usage)",
 		getArgumentCompletions: (argumentPrefix: string) => {
 			const p = argumentPrefix.trim().toLowerCase();
 			const items = [
@@ -959,7 +942,10 @@ export default function toolManager(pi: ExtensionAPI) {
 			const isClearGlobal = trimmed === "clear global";
 			const isClear = trimmed === "clear" || isClearGlobal;
 			if (trimmed && !isClear) {
-				ctx.ui.notify(`Unknown argument "${trimmed}". Usage: /tools [clear [global] | usage [clear [all]]]`, "warning");
+				ctx.ui.notify(
+					`Unknown argument "${trimmed}". Usage: /tools [clear [global] | usage [clear [all]]]`,
+					"warning",
+				);
 				return;
 			}
 
@@ -1013,19 +999,13 @@ export default function toolManager(pi: ExtensionAPI) {
 					: new Set([...(runtimeBaseline ?? []), ...pi.getActiveTools()]);
 			};
 
-
 			await ctx.ui.custom<Set<string> | undefined>(
 				(tui, theme, keybindings, done) =>
-					new ToolManagerPicker(
-						theme,
-						done,
-						rows,
-						initialChecked,
-						(scope, checked) =>
-							applySelection(ctx, scope, rows, checked),
+					new ToolManagerPicker(theme, done, rows, initialChecked, (scope, checked) =>
+						applySelection(ctx, scope, rows, checked),
 					),
 				{ overlay: true },
 			);
-			},
+		},
 	});
 }

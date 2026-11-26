@@ -22,7 +22,6 @@
 import { Type } from "typebox";
 import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-
 type CatalogEntry = {
 	provider: string;
 	model: string;
@@ -144,14 +143,12 @@ const whoamiTool = defineTool({
 		}
 
 		if (params.includeCatalog) {
-			const catalog: CatalogEntry[] = ctx.modelRegistry
-				.getAvailable()
-				.map((m) => ({
-					provider: m.provider,
-					model: m.id,
-					input: [...m.input],
-					vision: m.input.includes("image"),
-				}));
+			const catalog: CatalogEntry[] = ctx.modelRegistry.getAvailable().map((m) => ({
+				provider: m.provider,
+				model: m.id,
+				input: [...m.input],
+				vision: m.input.includes("image"),
+			}));
 			if (catalog.length > 0) {
 				result.catalog = catalog;
 				lines.push("", "auth-configured models:");

@@ -1,6 +1,11 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { constants } from "fs";
-import { access as fsAccess, readFile as fsReadFile, unlink as fsUnlink, writeFile as fsWriteFile } from "fs/promises";
+import {
+	access as fsAccess,
+	readFile as fsReadFile,
+	unlink as fsUnlink,
+	writeFile as fsWriteFile,
+} from "fs/promises";
 
 import type { Workspace } from "./types.js";
 
@@ -36,7 +41,8 @@ export function createRealWorkspace(pi: ExtensionAPI): Workspace {
 				return false;
 			}
 		},
-		checkWriteAccess: (absolutePath: string) => fsAccess(absolutePath, constants.R_OK | constants.W_OK),
+		checkWriteAccess: (absolutePath: string) =>
+			fsAccess(absolutePath, constants.R_OK | constants.W_OK),
 	};
 }
 

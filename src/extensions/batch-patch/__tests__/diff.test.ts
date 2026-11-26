@@ -30,7 +30,10 @@ describe("generateDiffString", () => {
 		const after = "a\nb\nc\nd\nREPLACED\n";
 		const { diff } = generateDiffString(before, after, 4);
 		for (const ctx of ["a", "b", "c", "d"]) {
-			assert.ok(diff.includes(` ${ctx}`) || diff.match(new RegExp(`\\s\\d+ ${ctx}`)), `missing context '${ctx}' in:\n${diff}`);
+			assert.ok(
+				diff.includes(` ${ctx}`) || diff.match(new RegExp(`\\s\\d+ ${ctx}`)),
+				`missing context '${ctx}' in:\n${diff}`,
+			);
 		}
 	});
 

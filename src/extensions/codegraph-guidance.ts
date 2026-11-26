@@ -45,9 +45,7 @@ export default function codegraphGuidanceExtension(pi: ExtensionAPI) {
 
 		// Check if codegraph MCP tools are registered in this session
 		const activeTools = pi.getActiveTools();
-		const hasCodegraph = activeTools.some(
-			(name) => name.startsWith("codegraph_"),
-		);
+		const hasCodegraph = activeTools.some((name) => name.startsWith("codegraph_"));
 		if (!hasCodegraph) return undefined;
 
 		return {

@@ -65,10 +65,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type {
-	ExtensionAPI,
-	ExtensionCommandContext,
-} from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 
 import { hostFileOf, parseHostRules, resolveHostCodes } from "./host-rules.js";
 import { deviceName } from "./tool-manager-usage.js";
@@ -235,9 +232,7 @@ function collectExtraFiles(cwd: string): ContextSnapshot {
 	const projectSettingsPath = path.join(cwd, ".pi", "settings.json");
 	const projectRaw = readJSON(projectSettingsPath);
 	const projectCtx = getExtraContext(projectRaw);
-	const includes = new Set<string>(
-		Array.isArray(projectCtx.includes) ? projectCtx.includes : [],
-	);
+	const includes = new Set<string>(Array.isArray(projectCtx.includes) ? projectCtx.includes : []);
 
 	// 1. Global settings: ~/.pi/agent/settings.json (resolve relative to ~/.pi/agent)
 	const globalBase = AGENT_DIR;
@@ -264,9 +259,7 @@ function collectConfiguredEntries(cwd: string): ConfiguredEntry[] {
 
 	const projectSettingsPath = path.join(cwd, ".pi", "settings.json");
 	const projectCtx = getExtraContext(readJSON(projectSettingsPath));
-	const includes = new Set<string>(
-		Array.isArray(projectCtx.includes) ? projectCtx.includes : [],
-	);
+	const includes = new Set<string>(Array.isArray(projectCtx.includes) ? projectCtx.includes : []);
 
 	const globalCtx = getExtraContext(readJSON(SETTINGS_PATH));
 	if (Array.isArray(globalCtx.files)) {
@@ -343,9 +336,7 @@ function removeFileFromSettings(settingsPath: string, filePath: string): boolean
 	if (settings === null) return false;
 	const ctx = ensureExtraContext(settings);
 	const before = (ctx.files as FileEntry[]).length;
-	ctx.files = (ctx.files as FileEntry[]).filter(
-		(e) => normalizeFileEntry(e).filePath !== filePath,
-	);
+	ctx.files = (ctx.files as FileEntry[]).filter((e) => normalizeFileEntry(e).filePath !== filePath);
 	if ((ctx.files as FileEntry[]).length === before) return false;
 	return writeSettings(settingsPath, settings);
 }
@@ -359,9 +350,7 @@ function setIncludesInSettings(settingsPath: string, includes: string[]): boolea
 }
 
 function settingsPathFor(ctx: ExtensionCommandContext, origin: EntryOrigin): string {
-	return origin === "project"
-		? path.join(ctx.cwd, ".pi", "settings.json")
-		: SETTINGS_PATH;
+	return origin === "project" ? path.join(ctx.cwd, ".pi", "settings.json") : SETTINGS_PATH;
 }
 
 // ── 主扩展 ─────────────────────────────────────────────────────
@@ -377,9 +366,7 @@ export default function extraAgentsFilesExtension(pi: ExtensionAPI) {
 	pi.on("before_agent_start", async (event) => {
 		if (extraFiles.length === 0) return;
 
-		const sections = extraFiles
-			.map((f) => `# ${f.displayPath}\n\n${f.content}`)
-			.join("\n");
+		const sections = extraFiles.map((f) => `# ${f.displayPath}\n\n${f.content}`).join("\n");
 
 		return {
 			systemPrompt: event.systemPrompt + `\n${sections}`,
@@ -414,11 +401,26 @@ export default function extraAgentsFilesExtension(pi: ExtensionAPI) {
 		handler: async (args: string, ctx: ExtensionCommandContext) => {
 			const sub = args.trim().split(/\s+/)[0]?.toLowerCase() || "";
 
-			if (sub === "reload") { cmdReload(ctx); return; }
-			if (sub === "add") { await cmdAdd(ctx); return; }
-			if (sub === "list" || sub === "ls") { await cmdList(ctx); return; }
-			if (sub === "includes" || sub === "inc") { await cmdIncludes(ctx); return; }
-			if (sub === "show") { cmdShow(ctx); return; }
+			if (sub === "reload") {
+				cmdReload(ctx);
+				return;
+			}
+			if (sub === "add") {
+				await cmdAdd(ctx);
+				return;
+			}
+			if (sub === "list" || sub === "ls") {
+				await cmdList(ctx);
+				return;
+			}
+			if (sub === "includes" || sub === "inc") {
+				await cmdIncludes(ctx);
+				return;
+			}
+			if (sub === "show") {
+				cmdShow(ctx);
+				return;
+			}
 
 			// 无参数 → 主菜单
 			const action = await ctx.ui.select("extra-files 管理", [
@@ -450,19 +452,25 @@ export default function extraAgentsFilesExtension(pi: ExtensionAPI) {
 			"文件路径",
 			"如 AGENTS-Java.md（全局相对 ~/.pi/agent，项目相对项目根）",
 		);
-		if (!pathInput?.trim()) { ctx.ui.notify("[extra-files] 已取消", "info"); return; }
+		if (!pathInput?.trim()) {
+			ctx.ui.notify("[extra-files] 已取消", "info");
+			return;
+		}
 		const filePath = pathInput.trim();
 
-		const tagInput = await ctx.ui.input(
-			"标签（逗号分隔，留空=无条件加载）",
-			"如 Java,backend",
-		);
+		const tagInput = await ctx.ui.input("标签（逗号分隔，留空=无条件加载）", "如 Java,backend");
 		const tags = tagInput?.trim()
-			? tagInput.split(/[,，]/).map((s) => s.trim()).filter(Boolean)
+			? tagInput
+					.split(/[,，]/)
+					.map((s) => s.trim())
+					.filter(Boolean)
 			: [];
 
 		const scope = await ctx.ui.select("保存位置", ["🌐 全局 (~/.pi/agent)", "📁 当前项目"]);
-		if (!scope) { ctx.ui.notify("[extra-files] 已取消", "info"); return; }
+		if (!scope) {
+			ctx.ui.notify("[extra-files] 已取消", "info");
+			return;
+		}
 		const origin: EntryOrigin = scope.startsWith("📁") ? "project" : "global";
 		const settingsPath = settingsPathFor(ctx, origin);
 
@@ -477,7 +485,7 @@ export default function extraAgentsFilesExtension(pi: ExtensionAPI) {
 
 		ctx.ui.notify(
 			`[extra-files] ✅ 已添加（${origin === "project" ? "📁项目" : "🌐全局"}${exists ? "" : " ⚠️文件不存在"}）\n` +
-			`   ${filePath}${tags.length ? ` [${tags.join(",")}]` : ""} — 当前加载 ${extraFiles.length} 个文件`,
+				`   ${filePath}${tags.length ? ` [${tags.join(",")}]` : ""} — 当前加载 ${extraFiles.length} 个文件`,
 			exists ? "info" : "warning",
 		);
 	}
@@ -523,12 +531,7 @@ export default function extraAgentsFilesExtension(pi: ExtensionAPI) {
 
 			const action = await ctx.ui.select(
 				`${cur.filePath} ${exists ? "✅" : "❌不存在"} ${origin}\n  tags: ${tagD}`,
-				[
-					`✏️ 路径: ${cur.filePath}`,
-					`🏷️ 标签: ${tagD}`,
-					"🗑️ 删除此文件",
-					"← 返回",
-				],
+				[`✏️ 路径: ${cur.filePath}`, `🏷️ 标签: ${tagD}`, "🗑️ 删除此文件", "← 返回"],
 			);
 			if (!action || action.startsWith("←")) return;
 
@@ -544,9 +547,12 @@ export default function extraAgentsFilesExtension(pi: ExtensionAPI) {
 
 			// 编辑字段
 			const field: "path" | "tags" = action.startsWith("✏️") ? "path" : "tags";
-			const hint = field === "path"
-				? "当前: " + cur.filePath
-				: cur.tags.length ? "当前: " + cur.tags.join(", ") : "当前: (无条件)";
+			const hint =
+				field === "path"
+					? "当前: " + cur.filePath
+					: cur.tags.length
+						? "当前: " + cur.tags.join(", ")
+						: "当前: (无条件)";
 			const inputVal = await ctx.ui.input(
 				field === "path" ? "输入新文件路径" : "输入新标签（逗号分隔，留空=无条件）",
 				hint,
@@ -554,9 +560,13 @@ export default function extraAgentsFilesExtension(pi: ExtensionAPI) {
 			// 空输入 → 保留原值，回到菜单
 			if (inputVal === undefined || inputVal.trim() === "") continue;
 
-			const newTags = field === "tags"
-				? inputVal.split(/[,，]/).map((s) => s.trim()).filter(Boolean)
-				: cur.tags;
+			const newTags =
+				field === "tags"
+					? inputVal
+							.split(/[,，]/)
+							.map((s) => s.trim())
+							.filter(Boolean)
+					: cur.tags;
 			const newPath = field === "path" ? inputVal.trim() : cur.filePath;
 
 			const sp = settingsPathFor(ctx, cur.origin);
@@ -595,7 +605,7 @@ export default function extraAgentsFilesExtension(pi: ExtensionAPI) {
 			`项目 includes 标签（控制全局带标签文件的加载）\n  当前: ${curStr}\n  可用标签: ${availStr}`,
 			[
 				"✏️ 设置 includes（输入）",
-				...allTags.size ? ["➕ 全选所有可用标签"] : [],
+				...(allTags.size ? ["➕ 全选所有可用标签"] : []),
 				"🧹 清空 includes（仅加载无条件文件）",
 				"← 返回",
 			],
@@ -613,8 +623,14 @@ export default function extraAgentsFilesExtension(pi: ExtensionAPI) {
 				"输入 includes 标签（逗号分隔）",
 				`当前: ${curStr}\n可用: ${availStr}`,
 			);
-			if (!input?.trim()) { ctx.ui.notify("[extra-files] 已取消", "info"); return; }
-			newIncludes = input.split(/[,，]/).map((s) => s.trim()).filter(Boolean);
+			if (!input?.trim()) {
+				ctx.ui.notify("[extra-files] 已取消", "info");
+				return;
+			}
+			newIncludes = input
+				.split(/[,，]/)
+				.map((s) => s.trim())
+				.filter(Boolean);
 		}
 
 		setIncludesInSettings(projectSettingsPath, newIncludes);
@@ -644,9 +660,6 @@ export default function extraAgentsFilesExtension(pi: ExtensionAPI) {
 			return;
 		}
 		const list = extraFiles.map((f) => `  • ${f.displayPath}`).join("\n");
-		ctx.ui.notify(
-			`[extra-files] 已加载 ${extraFiles.length} 个:\n${list}${missing}`,
-			level,
-		);
+		ctx.ui.notify(`[extra-files] 已加载 ${extraFiles.length} 个:\n${list}${missing}`, level);
 	}
 }

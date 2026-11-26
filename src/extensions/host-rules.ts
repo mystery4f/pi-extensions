@@ -61,10 +61,7 @@ export function parseHostRules(raw: unknown): HostRule[] {
  * Deduplication is case-insensitive because the file system may be, and the
  * first spelling wins.
  */
-export function resolveHostCodes(
-	rules: readonly HostRule[],
-	device: string,
-): string[] {
+export function resolveHostCodes(rules: readonly HostRule[], device: string): string[] {
 	const wanted = normalizeDeviceName(device);
 	const codes: string[] = [];
 	const seen = new Set<string>();

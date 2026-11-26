@@ -35,16 +35,10 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { Text } from "@earendil-works/pi-tui";
-import type {
-	ExtensionAPI,
-	ExtensionCommandContext,
-} from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 
 // ── 日志 ───────────────────────────────────────────────────────
-const LOG_FILE = path.join(
-	process.env.TEMP || process.env.TMP || "/tmp",
-	"auto-add-dir.log",
-);
+const LOG_FILE = path.join(process.env.TEMP || process.env.TMP || "/tmp", "auto-add-dir.log");
 function log(msg: string) {
 	const ts = new Date().toISOString();
 	fs.appendFileSync(LOG_FILE, `[${ts}] ${msg}\n`);
@@ -52,22 +46,16 @@ function log(msg: string) {
 
 function getExtDir(): string {
 	if (typeof (__dirname as any) === "string") return __dirname as string;
-	if (typeof (import.meta as any).dirname === "string")
-		return (import.meta as any).dirname;
+	if (typeof (import.meta as any).dirname === "string") return (import.meta as any).dirname;
 	try {
-		return path
-			.dirname(new URL(import.meta.url).pathname)
-			.replace(/^\/([A-Z]:)/, "$1");
+		return path.dirname(new URL(import.meta.url).pathname).replace(/^\/([A-Z]:)/, "$1");
 	} catch {
 		return process.cwd();
 	}
 }
 const EXT_DIR = getExtDir();
 
-const AGENT_DIR = path.join(
-	process.env.USERPROFILE || process.env.HOME || "~",
-	".pi/agent",
-);
+const AGENT_DIR = path.join(process.env.USERPROFILE || process.env.HOME || "~", ".pi/agent");
 const SETTINGS_PATH = path.join(AGENT_DIR, "settings.json");
 
 // ═══════════════════════════════════════════════════════════════
@@ -111,10 +99,7 @@ function loadEnvJson(): Record<string, string> {
 	}
 }
 
-function resolveVar(
-	name: string,
-	envJson: Record<string, string>,
-): string | undefined {
+function resolveVar(name: string, envJson: Record<string, string>): string | undefined {
 	return envJson[name] ?? process.env[name];
 }
 
@@ -172,9 +157,7 @@ function parseRulesFromSettings(
 			return [];
 		}
 
-		const settings = JSON.parse(
-			fs.readFileSync(settingsPath, "utf-8"),
-		) as Record<string, any>;
+		const settings = JSON.parse(fs.readFileSync(settingsPath, "utf-8")) as Record<string, any>;
 
 		const cfg = settings.autoAddDir as Config | undefined;
 		if (!cfg || !cfg.rules || cfg.rules.length === 0) {
@@ -236,7 +219,9 @@ function loadConfig(cwd?: string): ResolvedConfig {
 	for (const r of projectRules) rulesMap.set(r.dir, r);
 
 	const rules = [...rulesMap.values()];
-	log(`loadConfig: total ${rules.length} rule(s) (global=${globalRules.length}, project=${projectRules.length})`);
+	log(
+		`loadConfig: total ${rules.length} rule(s) (global=${globalRules.length}, project=${projectRules.length})`,
+	);
 	return { rules };
 }
 
@@ -257,9 +242,7 @@ function saveRuleToSettings(settingsPath: string, rule: Rule): boolean {
 	if (!settings.autoAddDir) settings.autoAddDir = {};
 	if (!Array.isArray(settings.autoAddDir.rules)) settings.autoAddDir.rules = [];
 
-	const idx = settings.autoAddDir.rules.findIndex(
-		(r: any) => r.dir === rule.dir,
-	);
+	const idx = settings.autoAddDir.rules.findIndex((r: any) => r.dir === rule.dir);
 	if (idx >= 0) {
 		settings.autoAddDir.rules[idx] = rule;
 		log(`saveRule: updated existing rule for "${rule.dir}"`);
@@ -302,9 +285,7 @@ function removeRuleFromSettings(settingsPath: string, dirSource: string): boolea
 	if (!Array.isArray(rules)) return false;
 
 	const before = rules.length;
-	settings.autoAddDir.rules = rules.filter(
-		(r: any) => r.dir !== dirSource,
-	);
+	settings.autoAddDir.rules = rules.filter((r: any) => r.dir !== dirSource);
 
 	if (settings.autoAddDir.rules.length === before) return false;
 
@@ -329,9 +310,7 @@ function matchRule(text: string, rule: ResolvedRule): boolean {
 }
 
 function buildReminder(dirs: ResolvedRule[]): string {
-	const list = dirs
-		.map((r) => `\`${r.dir}\` — ${r.description}`)
-		.join("; ");
+	const list = dirs.map((r) => `\`${r.dir}\` — ${r.description}`).join("; ");
 	return (
 		`**auto-add-dir reminder:** Discovered ${dirs.length} new director${dirs.length > 1 ? "ies" : "y"}` +
 		` (${list}). Before answering, you MUST call \`add_directory\` for each of them — ` +
@@ -359,7 +338,10 @@ export default function autoAddDirExtension(pi: ExtensionAPI) {
 	function discoverRule(rule: ResolvedRule): boolean {
 		if (discoveredDirs.has(rule.dir) || !fs.existsSync(rule.dir)) return false;
 		// cwd 已由 pi 原生加载上下文，add_directory 纯多余 → 跳过
-		if (sessionCwd && path.resolve(rule.dir).toLowerCase() === path.resolve(sessionCwd).toLowerCase()) {
+		if (
+			sessionCwd &&
+			path.resolve(rule.dir).toLowerCase() === path.resolve(sessionCwd).toLowerCase()
+		) {
 			log(`discover: skip "${rule.dir}" — already the session cwd`);
 			return false;
 		}
@@ -455,9 +437,18 @@ export default function autoAddDirExtension(pi: ExtensionAPI) {
 		handler: async (args: string, ctx: ExtensionCommandContext) => {
 			const subCmd = args.trim().split(/\s+/)[0]?.toLowerCase() || "";
 
-			if (subCmd === "reload") { cmdReload(ctx); return; }
-			if (subCmd === "add") { await cmdAdd(ctx); return; }
-			if (subCmd === "list" || subCmd === "ls") { await cmdList(ctx); return; }
+			if (subCmd === "reload") {
+				cmdReload(ctx);
+				return;
+			}
+			if (subCmd === "add") {
+				await cmdAdd(ctx);
+				return;
+			}
+			if (subCmd === "list" || subCmd === "ls") {
+				await cmdList(ctx);
+				return;
+			}
 
 			// 无参数 → 主菜单
 			const action = await ctx.ui.select("auto-add-dir 管理", [
@@ -476,24 +467,37 @@ export default function autoAddDirExtension(pi: ExtensionAPI) {
 
 	async function cmdAdd(ctx: ExtensionCommandContext) {
 		const dirInput = await ctx.ui.input("目录路径", "D:\\code\\my-project 或 ${ENV_VAR}/subdir");
-		if (!dirInput?.trim()) { ctx.ui.notify("[auto-add-dir] 已取消", "info"); return; }
+		if (!dirInput?.trim()) {
+			ctx.ui.notify("[auto-add-dir] 已取消", "info");
+			return;
+		}
 		const dir = dirInput.trim();
 
 		const descInput = await ctx.ui.input("规则描述", "用途说明，如「Obsidian 笔记库」");
-		if (!descInput?.trim()) { ctx.ui.notify("[auto-add-dir] 描述不能为空", "warning"); return; }
+		if (!descInput?.trim()) {
+			ctx.ui.notify("[auto-add-dir] 描述不能为空", "warning");
+			return;
+		}
 		const description = descInput.trim();
 
-		const kwInput = await ctx.ui.input("关键词（逗号分隔，留空=无条件匹配）", "如 obsidian,vault,笔记");
+		const kwInput = await ctx.ui.input(
+			"关键词（逗号分隔，留空=无条件匹配）",
+			"如 obsidian,vault,笔记",
+		);
 		const keywords = kwInput?.trim()
-			? kwInput.split(/[,，]/).map((s) => s.trim()).filter(Boolean)
+			? kwInput
+					.split(/[,，]/)
+					.map((s) => s.trim())
+					.filter(Boolean)
 			: [];
 
 		const scope = await ctx.ui.select("保存位置", ["🌐 全局", "📁 当前项目"]);
-		if (!scope) { ctx.ui.notify("[auto-add-dir] 已取消", "info"); return; }
+		if (!scope) {
+			ctx.ui.notify("[auto-add-dir] 已取消", "info");
+			return;
+		}
 		const isProject = scope.startsWith("📁");
-		const settingsPath = isProject
-			? path.join(ctx.cwd, ".pi", "settings.json")
-			: SETTINGS_PATH;
+		const settingsPath = isProject ? path.join(ctx.cwd, ".pi", "settings.json") : SETTINGS_PATH;
 
 		const rule: Rule = { dir, description };
 		if (keywords.length > 0) rule.keywords = keywords;
@@ -506,7 +510,7 @@ export default function autoAddDirExtension(pi: ExtensionAPI) {
 		config = loadConfig(ctx.cwd);
 		ctx.ui.notify(
 			`[auto-add-dir] ✅ 已添加（${isProject ? "📁项目" : "🌐全局"}，共 ${config.rules.length} 条）\n` +
-			`   ${dir} — ${description}`,
+				`   ${dir} — ${description}`,
 			"info",
 		);
 	}
@@ -555,7 +559,7 @@ export default function autoAddDirExtension(pi: ExtensionAPI) {
 
 			const action = await ctx.ui.select(
 				`[${ruleIdx + 1}] ${rule.description} ${exists} ${originIcon}\n` +
-				`  dir: ${rule.dirSource}\n  keywords: ${kwDisplay}`,
+					`  dir: ${rule.dirSource}\n  keywords: ${kwDisplay}`,
 				[
 					`✏️ 描述: ${rule.description}`,
 					`🏷️ 关键词: ${kwDisplay}`,
@@ -568,10 +572,13 @@ export default function autoAddDirExtension(pi: ExtensionAPI) {
 
 			// 删除
 			if (action.startsWith("🗑️")) {
-				const confirmed = await ctx.ui.confirm("确认删除", `${rule.description}\n${rule.dirSource}`);
+				const confirmed = await ctx.ui.confirm(
+					"确认删除",
+					`${rule.description}\n${rule.dirSource}`,
+				);
 				if (!confirmed) continue;
-				const sp = rule.origin === "project"
-					? path.join(ctx.cwd, ".pi", "settings.json") : SETTINGS_PATH;
+				const sp =
+					rule.origin === "project" ? path.join(ctx.cwd, ".pi", "settings.json") : SETTINGS_PATH;
 				removeRuleFromSettings(sp, rule.dirSource);
 				discoveredDirs.delete(rule.dir);
 				pendingReminder.delete(rule.dir);
@@ -605,15 +612,19 @@ export default function autoAddDirExtension(pi: ExtensionAPI) {
 			// 构建更新后的规则
 			const newDir = field === "dir" ? inputVal.trim() : rule.dirSource;
 			const newDesc = field === "description" ? inputVal.trim() : rule.description;
-			const newKeywords = field === "keywords"
-				? inputVal.split(/[,，]/).map((s) => s.trim()).filter(Boolean)
-				: rule.keywords;
+			const newKeywords =
+				field === "keywords"
+					? inputVal
+							.split(/[,，]/)
+							.map((s) => s.trim())
+							.filter(Boolean)
+					: rule.keywords;
 
 			const newRule: Rule = { dir: newDir, description: newDesc };
 			if (newKeywords.length > 0) newRule.keywords = newKeywords;
 
-			const sp = rule.origin === "project"
-				? path.join(ctx.cwd, ".pi", "settings.json") : SETTINGS_PATH;
+			const sp =
+				rule.origin === "project" ? path.join(ctx.cwd, ".pi", "settings.json") : SETTINGS_PATH;
 			if (field === "dir" && inputVal.trim() !== rule.dirSource) {
 				removeRuleFromSettings(sp, rule.dirSource);
 			}
