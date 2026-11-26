@@ -345,7 +345,7 @@ if (provider === "your-provider") {
 ---
 ### tool-registry
 
-`registry` 工具：给 AI 用的双向查询，把工具和提供它的插件对应起来。插件用 `npm:<包名>` 或 `git:<owner>/<repo>` 标识（包名/`owner/repo` 裸写也会自动补前缀）。
+`registry` 工具：给 AI 用的双向查询（另有无参清单版 `registry_tools` / `registry_plugins`），把工具和提供它的插件对应起来。插件用 `npm:<包名>` 或 `git:<owner>/<repo>` 标识（包名/`owner/repo` 裸写也会自动补前缀）。
 
 **查询方向**：
 
@@ -356,6 +356,12 @@ if (provider === "your-provider") {
 | `listPlugins=true` | 列出所有插件及各自工具数（按数量降序） |
 
 **典型用法**：某个工具报错或行为异常时，先 `registry` 查它属于哪个插件，再决定是读插件源码、向上游报 bug，还是找同名工具的其他来源；要摸清一个插件的全部能力时用 `plugin` 方向。
+**无需参数的清单工具**（同一插件注册，省掉记参数）：
+
+| 工具 | 返回 |
+|---|---|
+| `registry_tools` | 全部工具，一行一个：`工具名 — 插件` |
+| `registry_plugins` | 全部插件，一行一个：`插件 — 工具数`（按数量降序） |
 
 **实现要点**：插件归属复用 `tool-manager` 的 `sourceInfo` 解析规则（npm 包取 `node_modules` 下包名，git 检出取 `owner/repo`，其余归到 source 标签）；工具清单来自注册时捕获的 `pi.getAllTools()`（工具 `execute()` 的 ctx 不提供列表方法）。
 

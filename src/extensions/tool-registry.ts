@@ -4,6 +4,8 @@
  * Provides the `registry` tool for the model:
  *   - by plugin: list every tool a plugin provides (plugin given as `npm:<pkg>` or `git:<owner>/<repo>`)
  *   - by tool:  report which plugin a named tool comes from
+ *   - inventories: the parameterless `registry_tools` / `registry_plugins` companions return the
+ *     plain name lists (tool → plugin, plugin → tool count) without any query arguments.
  *
  * Motivation: when a tool fails or behaves unexpectedly, the model needs to know
  * where it came from before guessing — e.g. deciding whether to read the plugin's
@@ -278,6 +280,57 @@ function makeRegistryTool(listTools: () => ToolInfo[]) {
 	});
 }
 
+/** Parameterless inventory: every tool with the plugin that provides it. */
+function makeToolsListTool(listTools: () => ToolInfo[]) {
+	return defineTool({
+		name: "registry_tools",
+		label: "Tools list",
+		description: "List every available tool with the plugin that provides it (name — plugin).",
+		parameters: Type.Object({}),
+		promptSnippet: "registry_tools: list all tools with their plugin, no parameters",
+		promptGuidelines: [
+			"For the whole tool inventory with plugin ownership in one call, use `registry_tools`; it takes no parameters.",
+		],
+		async execute() {
+			const all = listTools();
+			const lines = [`${all.length} tool(s):`];
+			for (const tool of all) lines.push(`  ${tool.name} — ${pluginOf(tool).key}`);
+			return {
+				content: [{ type: "text", text: lines.join("\n") }],
+				details: { count: all.length, tools: all.map((tool) => tool.name) },
+			};
+		},
+	});
+}
+
+/** Parameterless inventory: every plugin with how many tools it provides. */
+function makePluginsListTool(listTools: () => ToolInfo[]) {
+	return defineTool({
+		name: "registry_plugins",
+		label: "Plugins list",
+		description: "List every plugin with how many tools it provides (plugin — count).",
+		parameters: Type.Object({}),
+		promptSnippet: "registry_plugins: list all plugins with tool counts, no parameters",
+		promptGuidelines: [
+			"To see which plugins are installed and how many tools each ships, use `registry_plugins`; it takes no parameters.",
+		],
+		async execute() {
+			const entries = [...buildIndex(listTools()).values()].sort(
+				(a, b) => b.tools.length - a.tools.length,
+			);
+			const lines = [`${entries.length} plugin(s):`];
+			for (const entry of entries) lines.push(`  ${entry.plugin} — ${entry.tools.length} tool(s)`);
+			return {
+				content: [{ type: "text", text: lines.join("\n") }],
+				details: { plugins: entries.map((e) => ({ plugin: e.plugin, tools: e.tools.length })) },
+			};
+		},
+	});
+}
+
 export default function toolRegistry(pi: ExtensionAPI) {
-	pi.registerTool(makeRegistryTool(() => pi.getAllTools()));
+	const listTools = () => pi.getAllTools();
+	pi.registerTool(makeRegistryTool(listTools));
+	pi.registerTool(makeToolsListTool(listTools));
+	pi.registerTool(makePluginsListTool(listTools));
 }
