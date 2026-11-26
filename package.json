@@ -58,6 +58,6 @@
 	"scripts": {
 		"typecheck": "tsc --noEmit",
 		"test": "node --import tsx --test \"src/**/__tests__/*.test.ts\"",
-		"prepare": "husky"
+		"prepare": "husky || exit 0"
 	}
 }
