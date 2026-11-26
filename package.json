@@ -48,10 +48,12 @@
   },
   "devDependencies": {
     "@types/node": "*",
+    "tsx": "^4.23.15",
     "typebox": "^1.1.38",
     "typescript": "*"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test \"src/**/__tests__/*.test.ts\""
   }
 }

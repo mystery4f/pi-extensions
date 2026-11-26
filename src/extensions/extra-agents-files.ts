@@ -44,6 +44,21 @@
  *   - No tags = always loaded (unconditional)
  *   - Global paths resolve relative to ~/.pi/agent; project paths relative to cwd
  *
+ *   方式三：按主机名注入（global settings.json 的 extraContext.hostRules）
+ *
+ *   {
+ *     "extraContext": {
+ *       "hostRules": [
+ *         { "host": "desktop-3ubepm3", "codes": ["kfCode"] },
+ *         { "host": "home-pc", "codes": ["homeCode", "kfCode"] }
+ *       ]
+ *     }
+ *   }
+ *
+ *   - "host": 与 deviceName() 的口径比较（小写、非法字符折成 -），PI_DEVICE_NAME 优先
+ *   - "codes": 该机器携带的代码；每个代码对应 ~/.pi/agent/AGENTS-<code>.md
+ *   - 一对多、多对一都成立；命中但文件不存在时静默跳过，/extra-files show 会提示
+ *
  *   Absolute paths and ~ are supported.
  */
 
@@ -55,6 +70,8 @@ import type {
 	ExtensionCommandContext,
 } from "@earendil-works/pi-coding-agent";
 
+import { hostFileOf, parseHostRules, resolveHostCodes } from "./host-rules.js";
+import { deviceName } from "./tool-manager-usage.js";
 // ── 路径常量 ─────────────────────────────────────────────────────
 
 const AGENT_DIR = path.join(os.homedir(), ".pi", "agent");
@@ -72,6 +89,8 @@ type FileEntry = string | { path: string; tags?: string[] };
 interface ExtraContextConfig {
 	files?: FileEntry[];
 	includes?: string[];
+	/** Decoded by host-rules.ts; kept as unknown here so a bad value fails closed. */
+	hostRules?: unknown;
 }
 
 type EntryOrigin = "global" | "project";
@@ -168,11 +187,48 @@ function loadFromSettings(
 	return results;
 }
 
+/** Files found for this machine, plus the codes that matched without a file. */
+interface ContextSnapshot {
+	files: ExtraFile[];
+	/** Codes a host rule matched here whose `AGENTS-<code>.md` does not exist. */
+	missingHostCodes: string[];
+}
+
 /**
- * Collect extra context files from both global and project settings.
+ * Files named by `extraContext.hostRules` for this machine.
+ * A matched code with no file is reported, not injected: a typo in the file
+ * name must not look like "this machine carries no extra context".
  */
-function collectExtraFiles(cwd: string): ExtraFile[] {
+function loadHostFiles(
+	raw: Record<string, unknown> | null,
+	baseDir: string,
+	seen: Set<string>,
+): ContextSnapshot {
+	const snapshot: ContextSnapshot = { files: [], missingHostCodes: [] };
+	const rules = parseHostRules(getExtraContext(raw).hostRules);
+
+	for (const code of resolveHostCodes(rules, deviceName())) {
+		const resolved = hostFileOf(code, baseDir);
+		if (seen.has(resolved)) continue;
+		try {
+			const content = fs.readFileSync(resolved, "utf-8");
+			seen.add(resolved);
+			snapshot.files.push({ displayPath: `AGENTS-${code}.md`, content });
+		} catch {
+			snapshot.missingHostCodes.push(code);
+		}
+	}
+	return snapshot;
+}
+
+/**
+ * Collect extra context files from global settings, host rules and project
+ * settings — in that order, so a host file overrides nothing a project file
+ * says later in the prompt.
+ */
+function collectExtraFiles(cwd: string): ContextSnapshot {
 	const results: ExtraFile[] = [];
+	const missingHostCodes: string[] = [];
 	const seen = new Set<string>();
 
 	// Read project includes first (needed to filter global files)
@@ -189,12 +245,17 @@ function collectExtraFiles(cwd: string): ExtraFile[] {
 		results.push(f);
 	}
 
-	// 2. Project settings: .pi/settings.json (resolve relative to cwd, no tag filtering)
+	// 2. Host rules: ~/.pi/agent/AGENTS-<code>.md for every code this machine carries
+	const host = loadHostFiles(readJSON(SETTINGS_PATH), AGENT_DIR, seen);
+	results.push(...host.files);
+	missingHostCodes.push(...host.missingHostCodes);
+
+	// 3. Project settings: .pi/settings.json (resolve relative to cwd, no tag filtering)
 	for (const f of loadFromSettings(projectSettingsPath, cwd, seen)) {
 		results.push(f);
 	}
 
-	return results;
+	return { files: results, missingHostCodes };
 }
 
 /** All configured entries across global + project, with loaded state under current includes. */
@@ -307,9 +368,10 @@ function settingsPathFor(ctx: ExtensionCommandContext, origin: EntryOrigin): str
 
 export default function extraAgentsFilesExtension(pi: ExtensionAPI) {
 	let extraFiles: ExtraFile[] = [];
+	let missingHostCodes: string[] = [];
 
 	pi.on("session_start", async (_event, ctx) => {
-		extraFiles = collectExtraFiles(ctx.cwd);
+		reload(ctx.cwd);
 	});
 
 	pi.on("before_agent_start", async (event) => {
@@ -376,7 +438,9 @@ export default function extraAgentsFilesExtension(pi: ExtensionAPI) {
 	});
 
 	function reload(cwd: string) {
-		extraFiles = collectExtraFiles(cwd);
+		const snapshot = collectExtraFiles(cwd);
+		extraFiles = snapshot.files;
+		missingHostCodes = snapshot.missingHostCodes;
 	}
 
 	// ── 添加文件 ──
@@ -571,13 +635,18 @@ export default function extraAgentsFilesExtension(pi: ExtensionAPI) {
 	// ── 查看已加载 ──
 
 	function cmdShow(ctx: ExtensionCommandContext) {
+		const missing = missingHostCodes.length
+			? `\n🖥️ hostRules 命中但文件不存在: ${missingHostCodes.map((c) => `AGENTS-${c}.md`).join(", ")}`
+			: "";
+		const level = missing ? "warning" : "info";
 		if (extraFiles.length === 0) {
-			ctx.ui.notify("[extra-files] 当前未加载任何文件", "info");
+			ctx.ui.notify(`[extra-files] 当前未加载任何文件${missing}`, level);
 			return;
 		}
+		const list = extraFiles.map((f) => `  • ${f.displayPath}`).join("\n");
 		ctx.ui.notify(
-			`[extra-files] 已加载 ${extraFiles.length} 个:\n${extraFiles.map((f) => `  • ${f.displayPath}`).join("\n")}`,
-			"info",
+			`[extra-files] 已加载 ${extraFiles.length} 个:\n${list}${missing}`,
+			level,
 		);
 	}
 }

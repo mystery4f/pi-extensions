@@ -145,6 +145,7 @@ if (provider === "your-provider") {
 
 - 📁 **两级配置** — 全局 (`~/.pi/agent/settings.json`) + 项目 (`.pi/settings.json`)
 - 🏷️ **标签过滤** — 全局文件可标记标签，项目按需声明加载哪些标签
+- 📌 **按主机注入** — `hostRules` 把 hostname 映射到设备代码，命中即注入 `AGENTS-<code>.md`，一机多码、一码多机都支持
 - 🔄 **去重** — 同一路径只加载一次，项目配置优先级高于全局
 - 🏠 **路径灵活** — 支持相对路径、绝对路径、`~` 展开
 - 🖥️ **交互式命令** — 通过 `/extra-files` 命令交互式管理（添加/编辑/删除/includes/重载），无需手改配置文件
@@ -185,13 +186,34 @@ if (provider === "your-provider") {
 | `files[].tags` | 可选标签数组。无标签 = 所有项目都加载 |
 | `includes` | 可选，声明项目需要的标签。全局文件 **无标签** 或 **标签匹配** 时才会加载 |
 
+**按主机名注入（`hostRules`，只读全局配置）**：
+
+```json
+{
+  "extraContext": {
+    "hostRules": [
+      { "host": "desktop-3ubepm3", "codes": ["kfCode"] },
+      { "host": "home-pc", "codes": ["homeCode", "kfCode"] }
+    ]
+  }
+}
+```
+
+| 字段 | 说明 |
+|---|---|
+| `hostRules` | 主机规则数组；每条为 `{ host, codes }`，畸形条目整条丢弃 |
+| `hostRules[].host` | 与设备名同口径比较：小写、非 `[a-z0-9._-]` 折成 `-`；`PI_DEVICE_NAME` 优先于 hostname |
+| `hostRules[].codes` | 该机器携带的设备代码，每个代码对应 `~/.pi/agent/AGENTS-<code>.md` |
+
+命中但 `AGENTS-<code>.md` 不存在时不注入，`/extra-files show` 会以 ⚠️ 列出缺失的代码。设计与取舍见 [ADR 0003](docs/adr/0003-host-rules-device-codes.md)。
+
 **加载逻辑**：
 
-1. 读取项目 `.pi/settings.json` 的 `extraContext.includes`，构建标签集合
-2. 加载全局 `extraContext.files`（过滤标签）
-3. 加载项目级 `extraContext.files`（不过滤标签）
-4. 所有匹配文件的内容注入 system prompt
-
+- 读取项目 `.pi/settings.json` 的 `extraContext.includes`，构建标签集合
+- 加载全局 `extraContext.files`（过滤标签），全局路径相对 `~/.pi/agent`
+- 按全局 `extraContext.hostRules` 命中本机的代码，加载 `~/.pi/agent/AGENTS-<code>.md`
+- 加载项目级 `extraContext.files`（不过滤标签），路径相对项目根
+- 同一路径只加载一次，所有匹配文件的内容注入 system prompt
 ---
 
 ### auto-add-dir

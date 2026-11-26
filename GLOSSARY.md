@@ -30,6 +30,18 @@ settings.json 的 `packages` 数组。同步场景下的唯一权威：pi 启动
 
 磁盘上存在但不在声明集里的已安装包。npm 侧指 `npm/package.json` 中未被声明的依赖（及其独占的传递依赖）；git 侧指 `agent/git/` 下无对应声明的克隆目录。孤儿包是被移除的声明经过同步后遗留的产物。
 
+## 主机规则（Host Rule）
+
+`extraContext.hostRules` 里的一条 `{ host, codes }`。`host` 按设备名口径归一化后与当前机器比较，`codes` 是该机器携带的设备代码。多对多：一条规则可带多个代码，同一个代码可出现在多条规则里。
+
+## 设备代码（Device Code）
+
+主机规则里的字符串，同时是文件名的一部分：`AGENTS-<code>.md`。只接受 `[a-z0-9][a-z0-9._-]*` 且不含 `..`，其余丢弃。
+
+## 主机上下文文件（Host Context File）
+
+`~/.pi/agent/AGENTS-<code>.md`，由设备代码唯一命名。命中即注入，文件不存在则不注入并记入缺失列表。它与 `files` 里的条目是两个来源，同一路径以先加载者为准（全局 `files` → 主机文件 → 项目 `files`）。
+
 ## 回收目录（Trash Directory）
 
 `agent/git/.trash/`。git 侧孤儿包的移入地，不做自动删除——克隆里可能有未推送的本地改动，最终清理由用户手动完成。

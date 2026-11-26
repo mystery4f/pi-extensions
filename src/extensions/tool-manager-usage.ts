@@ -55,17 +55,25 @@ export type UsageLine = {
 };
 
 /**
- * Filename-safe device name: `PI_DEVICE_NAME` when set (WSL/container hosts can
- * collide), otherwise the hostname lowercased with unsafe characters folded to
- * `-`.
+/**
+ * Filename- and config-safe host name: lowercased with unsafe characters
+ * folded to `-`. Every place that compares a machine name — usage files,
+ * host rules — goes through here, so one folding rule decides all of them.
  */
-export function deviceName(raw: string | undefined = process.env.PI_DEVICE_NAME): string {
-	const candidate = raw?.trim() || os.hostname();
+export function normalizeDeviceName(candidate: string): string {
 	const safe = candidate
 		.toLowerCase()
 		.replace(/[^a-z0-9._-]+/g, "-")
 		.replace(/^[-.]+|[-.]+$/g, "");
 	return safe || "unknown";
+}
+
+/**
+ * This machine's device name: `PI_DEVICE_NAME` when set (WSL/container hosts
+ * can collide), otherwise the hostname.
+ */
+export function deviceName(raw: string | undefined = process.env.PI_DEVICE_NAME): string {
+	return normalizeDeviceName(raw?.trim() || os.hostname());
 }
 
 /** Absolute path of one device's usage file. */
